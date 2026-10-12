@@ -1,0 +1,31 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - project_data:/app/var
+    expose:
+      - "8000"
+  web:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Configure an actual domain first}
+      AIC_LOGIN: ${AIC_LOGIN:?Configure a login name first}
+      AIC_PASSWORD_HASH: ${AIC_PASSWORD_HASH:?Configure a Caddy password hash first}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  project_data:
+  caddy_data:
+  caddy_config:

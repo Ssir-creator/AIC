@@ -1,1 +1,116 @@
-# AIC
+# 谱易改
+
+单乐器短音频的 AI 转谱、原音对照与人工校对原型。参赛方向暂定 **2026 AIC / AI+软件创新**。产品定位：面向琵琶学习者的短录音转谱与纠谱，定位与修正识别结果中的错音和时长，生成可继续使用的乐谱草稿；场景效果须以真实试用验证。
+
+当前基础模型是 **Spotify Basic Pitch 0.4.0**，采用官方支持的 ONNX CPU 模型，未进行模型训练。本项目实现上传、音符时间轴与初稿叠加对照、逐音符导航、片段试听、简易合成试听、音高/时间/力度编辑、补音、删除、撤销、MIDI/MusicXML草稿导出、修改记录和项目恢复。另有参考MIDI练习纠谱模块：手动时间对齐、参考叠加、音高/起音/时长差异、参考缺失/新增提示与原音定位。不能将这些功能描述成已证明的算法精度提升。
+
+## 运行
+
+需要 Python **3.12** 和 PATH 中的 **ffmpeg**。Linux + Python3.12已实测；Windows说明已提供，尚未在Windows机器实测。
+
+Linux / 服务器：
+
+```bash
+cd /path/to/AIC
+python3 scripts/install.py
+.venv/bin/python scripts/start.py
+```
+
+Windows PowerShell：
+
+```powershell
+# 如果系统没有ffmpeg，可先用winget安装，并重新打开终端
+winget install --id Gyan.FFmpeg -e
+cd C:\path\to\AIC
+py -3.12 scripts/install.py
+$env:AIC_PORT="8765"
+.\.venv\Scripts\python.exe scripts\start.py
+```
+
+服务默认只监听本机8000端口；用浏览器打开该端口即可操作。服务器远程演示优先使用SSH端口转发，在Windows终端运行 `ssh -L 8000:127.0.0.1:8000 user@server`。`user@server`替换为自己的服务器登录信息。此原型没有账号权限，不宜直接作为公共多用户服务。需要公开部署时应在反向代理配置HTTPS、访问控制、20MB请求上限与足够的推理超时。
+
+可配置 `AIC_HOST`、`AIC_PORT`、`AIC_DATA_DIR`。仅运行**一个worker**，模型处理时其他转谱请求返回429；编辑和导出仍可使用。录音与记录保存在 `var/`；进程重启后可恢复，浏览器记录最近项目ID。删除项目会删除其服务端音频与记录。关闭浏览器不会自动删除音频。源录音不会发送到第三方模型API。
+
+## 安装说明
+
+`requirements.lock`固定当前验证环境的运行与测试依赖。上游Basic Pitch在Python>=3.11上声明旧版TensorFlow依赖，该版本没有Python3.12轮子。因此安装脚本完整安装ONNX所需依赖后，单独以 `--no-deps` 安装 `basic-pitch==0.4.0`；此处是选择官方ONNX运行后端，没有修改模型或降低TLS验证。`pip check`会提示未安装TensorFlow，这是此后端选择的已知元数据限制；以真实ONNX推理测试验证运行能力。`setuptools<81`保留resampy所需的pkg_resources。
+
+## 检查
+
+```bash
+.venv/bin/python -m pytest -q
+# 浏览器检查需额外安装playwright并有Chromium；不属于运行依赖
+python scripts/browser_smoke.py --chromium /usr/bin/chromium
+# 从界面下载校对记录后，使用独立标注CSV评测
+.venv/bin/python scripts/evaluate.py review-record.json gold.csv --output artifacts/evaluation.json
+```
+
+标注CSV的列是 `pitch,start,end`，单位为MIDI编号与秒。标注必须由乐谱或独立人工判断获得，不能拿模型输出当真值。人工校对后结果与模型原始结果分别报告。
+
+## 当前边界
+
+- 输入最长60秒、最大20MB，重点演示清晰独奏。混合伴奏不属于当前验证范围。
+- 输出音符时间轴、MIDI与MusicXML草稿；MusicXML采用用户指定BPM/拍号/起拍位置及固定十六分音符网格，支持休止、跨小节连音和重叠声部。提供网页五线谱预览，但没有自动节拍/拍号识别、三连音或琵琶技法标记。实际MuseScore导入待用户验证。量化不改变原始MIDI。
+- 原型未针对琵琶训练；琵琶滑音、轮指、泛音、余音干扰及和弦识别尚待实测。
+- 短音符和弱音符标记是试听优先级规则，不是模型置信度或已经验证的错误检测器。
+- 合成试听是振荡器，不是琵琶采样音色。
+- 基础模型已存在公开网页版与第三方编辑工具，本产品的竞争优势尚未证实，必须补竞品比较和真实用户校对验证。
+
+参赛准备见 [工作计划](docs/参赛工作计划.md)、[技术方案初稿](docs/技术方案初稿.md)、[演示视频脚本](docs/演示视频脚本.md)。
+
+公开数据的官方下载、固定抽样与批量评测步骤见 [公开数据选择](docs/公开数据选择.md)。官方GuitarSet已下载并校验，12段诊断与另一组12段后续验证已完成，见 [阶段评测报告](docs/阶段评测报告.md)。数据采用CC BY 4.0；这些吉他结果不能称为琵琶精度或原创算法提升。阈值校准未超过默认值，保持默认参数。
+
+## 引用与许可
+
+基础模型及其推理/音符后处理来自 Spotify Basic Pitch（Apache-2.0）：https://github.com/spotify/basic-pitch 。许可证与NOTICE保存于 `third_party/`。论文：Bittner et al., *A Lightweight Instrument-Agnostic Model for Polyphonic Note Transcription and Multipitch Estimation*, ICASSP 2022。其他第三方依赖保留各自许可证；提交代码包时不要删除依赖自带的许可信息。
+
+本项目开发使用AI编程辅助。参赛者应亲自理解、验证、调整并能解释作品，按竞赛对AI辅助的具体要求如实披露；“一人独立完成”或原创贡献必须与实际过程一致。
+
+可下载的阶段报告和小样例包在artifacts中。生成报告需额外安装reportlab，图表需matplotlib，这两者不是运行应用的必需依赖。实验产物、音频和模型依赖不放入源码开发包。
+
+真实琵琶试用请按 [试用指南](docs/琵琶试用指南.md) 进行，创新主张与评分证据见 [创新与评分证据规划](docs/创新与评分证据规划.md)。
+
+## 参考曲谱纠谱
+
+上传录音后，可导入对应片段的MIDI曲谱（非打击乐，最多500音符、1MB、0—120秒）。参考时间映射为“原时间×缩放+平移”；可将原音播放器当前位置设为参考第一音的位置。先确认第一音与末尾音，再检查差异。紫色虚线显示参考，灰色是模型初稿，实心是当前结果。
+
+默认在0.3秒窗口内作一对一匹配，优先匹配音高一致者。起音差异超过0.08秒、时长差异超过0.12秒时提示；容差可手动设置。超出录音范围的参考音符明确列为未比较。复杂自由速度片段的可靠性尚待验证，也没有简谱图片自动识别。纸面曲谱需由识谱者整理并确认参考MIDI。
+
+提示仅说明“参考与当前识别结果不同”。它可能来自演奏、AI识别或对齐错误，不是演奏评分。修改初稿不改变原音频。当前/原始差异、参考曲谱与时间对齐历史包含在JSON校对记录中。
+
+新增真实琵琶录音的前30秒功能诊断见 [琵琶首次诊断](docs/琵琶首次诊断.md)。录音、谱页及诊断未作为可公开授权的数据发布；源码包不包含用户录音。
+
+
+自动定位旋律（试验）：参考为2—100个非重叠音符时，可用序列匹配定位原始模型音符中的对应片段。支持局部速度变化，标记重复片段歧义，位置来源写入记录。由于使用模型本身的起音，自动模式不评定起音和时长，避免循环评测；手动更新对齐后退出此模式。仍不能直接认定演奏错误。
+
+私有试用包另附本人春雨录音和待确认参考，运行`.venv/bin/python scripts/import_practice_demo.py`后，界面可直接打开案例。源码开发包没有用户录音，不提供这个预置案例。私有包仅供参赛者试用，不当作公开数据集。
+
+## 审核材料制作（可选）
+
+`scripts/record_demo_video.py`使用Playwright和系统Chromium录制真实浏览器操作，需运行服务和私有案例输入；`scripts/encode_demo_video.py`将完成的录屏编码为MP4，并在明确披露的时间加入原音片段。字幕中的编辑是操作展示，不是已经验证的纠错结果。这些工具不是应用运行依赖。
+
+此Linux环境的Playwright录屏组件下载被域名限制阻止，已用现有系统ffmpeg验证录屏兼容性。这里设置`PLAYWRIGHT_BROWSERS_PATH`指向项目`.cache/playwright`，其`ffmpeg-1011/ffmpeg-linux`为`/usr/bin/ffmpeg`的本地链接；未关闭校验或使用外部不明二进制。其他环境应安装官方Playwright组件，或自行验证已有ffmpeg兼容性，不能假定此本地缓存随源码分发。
+
+`scripts/check_submission.py`检查名称、简介、PDF大小和MP4时长/大小，需可选pypdf。它不验证音乐准确率、匿名视觉合规或官方模板，检查通过也不表示材料可直接提交。
+
+## 独立听音核对工具
+
+`review_tool/index.html`为无模型提示的核对工具模板；`scripts/build_independent_review.py`将私有录音嵌入离线HTML，得到独立核对包，不放入公开源码。核对者可使用波形与播放器定位、选择绝对音高、记录起止、保存和恢复JSON。待确认音符或缺失独立/完整核对声明会阻止导出确认CSV。
+
+应用新上传记录保存原文件SHA256。`scripts/evaluate_independent_review.py project.json review.json --audio first-30s.wav`仅接收确认记录，核验音频摘要与项目来源，并只评测声明范围。工具不替代识谱者，也不自动保证手动时间标注精度。独立核对页面浏览器功能已测试；Windows file方式仍需设备验证。
+
+## 网站参赛演示版 v0.2
+
+正式演示视频由参赛者实际操作拍摄；旧自动化字幕视频仅是历史审核产物，不作为正式参赛视频。本轮集中更新网站，没有再次生成视频或以自动化操作冒充真人试用。
+
+网站分为听音校对、参考对照、乐谱预览与导出三个页签。新增音名选择、播放位置设置起止、0.5/0.75倍原音慢放、选中音符循环、时间轴放大及最近20个项目入口。项目列表为同一可信服务的数据，未增加账号隔离。
+
+五线谱预览使用本地打包的OpenSheetMusicDisplay 1.9.2（BSD-3-Clause），与相同设置的MusicXML导出使用同一内容。固定版本npm包SHA512已验证，来源摘要与许可证在third_party；浏览器不需要CDN。npm无需作为应用运行前提。修改音符/制谱设置后旧预览会失效，需重新生成。预览显示量化草稿，不是原谱识别或已确认纠错效果。
+
+验证命令：`python scripts/browser_smoke.py`覆盖原有编辑、参考和导出流程；`python scripts/check_website_v02.py`使用私有春雨前30秒核对慢放、循环、MusicXML SVG预览、移动端布局和项目切换。浏览器功能验证不是用户效果证据。
+
+## 免费在线试用准备
+
+`render.yaml`提供Render Docker Blueprint，运行Python完整版并启用HTTP Basic登录保护。需本人Render账号和GitHub仓库授权，创建后以平台实际显示的URL为准；配置文件不表示服务已经上线。平台PORT环境变量优先用于启动。
+
+线上设置`AIC_REQUIRE_AUTH=1`及至少16字符的`AIC_ACCESS_PASSWORD`，未配置时请求返回503；设置后项目、录音、静态页面和修改接口需登录，健康检查不含项目数据。离线默认无访问密码。免费实例可能休眠或清空临时项目，界面提示及时导出。步骤见docs/免费托管上线步骤.md。

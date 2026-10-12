@@ -1,0 +1,13 @@
+.git
+.venv
+.cache
+var
+artifacts
+attachments
+__pycache__
+**/__pycache__
+.env
+**/.env
+*.zip
+*.wav
+*.m4a

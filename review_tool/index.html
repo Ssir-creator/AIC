@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>琵琶独立听音核对</title>
+<style>
+body{font:17px/1.6 system-ui,sans-serif;max-width:1050px;margin:30px auto;padding:0 20px;background:#f5f6ef;color:#25392d}section{background:white;padding:20px;border:1px solid #dae2d4;border-radius:12px;margin:18px 0}button,input,select{font:inherit;padding:7px;margin:4px}button{cursor:pointer}audio,canvas{width:100%}canvas{height:110px;cursor:crosshair;border:1px solid #d5dfcc}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px;border-bottom:1px solid #ddd}.hint{color:#53644d}#status{white-space:pre-wrap}label{display:inline-block;margin-right:12px}input[type=number]{width:110px}#notes{overflow:auto}
+</style>
+<h1>琵琶独立听音核对</h1>
+<p>只提供原音，<strong>不显示AI结果或暂定旋律</strong>。请懂谱的人结合你已有的谱页，先独立记录实际听到的音符，再看模型。不会填写的音符标“待确认”，不要猜。</p>
+<section><label>录音 <select id="clip"></select></label><label>匿名核对者编号 <input id="reviewer" placeholder="例如 P01" maxlength="30"></label>
+<p id="source" class="hint"></p><audio id="audio" controls preload="metadata"></audio>
+<label>试听速度 <select id="rate"><option>1</option><option>0.75</option><option>0.5</option></select></label>
+<p class="hint">波形供定位，点击可跳转。时间均是原录音秒数；慢放也不改变导出时间。琵琶余音终点难判，无法确定时请保留待确认。</p>
+<canvas id="wave" width="1000" height="110" aria-label="原音波形"></canvas><p id="position">当前位置 0.000 秒</p></section>
+<section><h2>添加一个实际听到的音符</h2>
+<label>音高 <select id="pitch"></select></label><label>开始 <input id="start" type="number" min="0" step="0.001" value="0"></label><button id="mark-start">用当前位置作为开始</button>
+<label>结束 <input id="end" type="number" min="0" step="0.001" value="0.5"></label><button id="mark-end">用当前位置作为结束</button>
+<label>状态 <select id="certainty"><option value="uncertain">待确认</option><option value="confirmed">音高与起止均已核对</option></select></label><button id="add">添加音符</button>
+<p>中央C为 C4（MIDI 60），标准音为 A4（MIDI 69）。这里用绝对音名；请根据原谱调号、八度点及泛音实际发声核对。重叠音符可以分别记录；休止不用加音符。</p>
+<div id="notes"><table><thead><tr><th>音高</th><th>开始/秒</th><th>结束/秒</th><th>状态</th><th>操作</th></tr></thead><tbody id="rows"></tbody></table></div></section>
+<section><h2>保存核对记录</h2>
+<label>核对范围开始 <input id="scope-start" type="number" min="0" step="0.001" value="0"></label>
+<label>核对范围结束 <input id="scope-end" type="number" min="0" step="0.001" value="30"></label>
+<p class="hint">只核对开头一部分也可以，填写真实范围。后续评测必须按同一范围裁剪模型，不能用部分标注计算整段准确率。手动时间标注仍需复核，页面不会自动保证精确到50毫秒。</p>
+<p><label><input type="checkbox" id="independent">本人未查看模型输出，依据原音与原谱独立核对。</label></p>
+<p><label><input type="checkbox" id="complete">上述范围内的全部音符（含重叠音）与起止均已核对，不是只挑几个容易的音。</label></p>
+<label>难点/不同意见 <input id="comment" maxlength="500" placeholder="轮指、泛音或难判的余音等"></label>
+<p><button id="save">保存核对JSON（可保留待确认）</button><button id="csv">导出已确认CSV及配套JSON</button></p>
+<label>恢复刚才保存的JSON <input type="file" id="restore" accept=".json"></label>
+<p id="status" role="status"></p></section>
+<p>本页面离线使用，不上传音频、编号或记录。录音由参赛者本人提供，仅供私有核对。关闭前请保存JSON；没有浏览器自动保存。不要把未确认草稿当作真值。</p>
+<script id="inputs" type="application/json">__INPUTS__</script>
+<script>
+'use strict';
+const clips=JSON.parse(document.querySelector('#inputs').textContent),$=s=>document.querySelector(s);
+let selected=0,notes=[],editIndex=null,buffer=null,audioContext=null;
+const names=['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
+const pitchName=p=>names[p%12]+(Math.floor(p/12)-1);
+function status(t){$('#status').textContent=t;}
+for(let p=21;p<=108;p++){const o=new Option(pitchName(p)+' / '+p,p);$('#pitch').add(o);}$('#pitch').value='60';
+clips.forEach((c,i)=>$('#clip').add(new Option(c.title,i)));
+function draw(){const c=$('#wave'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);if(!buffer)return;const d=buffer.getChannelData(0);ctx.strokeStyle='#4b754d';ctx.beginPath();for(let x=0;x<c.width;x++){let peak=0;const lo=Math.floor(x*d.length/c.width),hi=Math.floor((x+1)*d.length/c.width);for(let i=lo;i<hi;i++)peak=Math.max(peak,Math.abs(d[i]));ctx.moveTo(x,55-peak*50);ctx.lineTo(x,55+peak*50);}ctx.stroke();ctx.strokeStyle='#d76936';const x=$('#audio').currentTime/clips[selected].duration*c.width;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,110);ctx.stroke();}
+async function load(i){selected=i;notes=[];editIndex=null;buffer=null;$('#add').textContent='添加音符';$('#audio').src=clips[i].audio;$('#audio').playbackRate=Number($('#rate').value);$('#scope-start').value='0';$('#scope-end').value=clips[i].duration;$('#independent').checked=false;$('#complete').checked=false;$('#comment').value='';$('#source').textContent=clips[i].title+' / 本人演奏录音前30秒 / 尚无已确认音符标注';render();try{audioContext??=new AudioContext();const bytes=Uint8Array.from(atob(clips[i].audio.split(',')[1]),x=>x.charCodeAt(0));const decoded=await audioContext.decodeAudioData(bytes.buffer);if(selected===i){buffer=decoded;draw();}}catch{status('波形无法显示，仍可使用播放器和手填时间。');}}
+$('#clip').onchange=()=>{if(notes.length&&!confirm('切换会清空尚未保存的音符。已保存JSON了吗？')){$('#clip').value=selected;return;}load(Number($('#clip').value));};
+$('#rate').onchange=()=>$('#audio').playbackRate=Number($('#rate').value);
+$('#audio').ontimeupdate=()=>{$('#position').textContent='当前位置 '+$('#audio').currentTime.toFixed(3)+' 秒';draw();};
+$('#wave').onclick=e=>{const r=$('#wave').getBoundingClientRect();$('#audio').currentTime=Math.max(0,Math.min(clips[selected].duration,(e.clientX-r.left)/r.width*clips[selected].duration));};
+$('#mark-start').onclick=()=>$('#start').value=$('#audio').currentTime.toFixed(3);
+$('#mark-end').onclick=()=>$('#end').value=$('#audio').currentTime.toFixed(3);
+function render(){const rows=$('#rows');rows.replaceChildren();notes.forEach((n,i)=>{const tr=document.createElement('tr');for(const text of [pitchName(n.pitch),n.start.toFixed(3),n.end.toFixed(3),n.certainty==='confirmed'?'已核对':'待确认']){const td=document.createElement('td');td.textContent=text;tr.append(td);}const td=document.createElement('td');for(const [label,action] of [['试听',()=>{$('#audio').currentTime=n.start;$('#audio').play();}],['修改',()=>{editIndex=i;for(const k of ['pitch','start','end','certainty'])$('#'+k).value=n[k];$('#add').textContent='保存修改';}],['删除',()=>{notes.splice(i,1);editIndex=null;$('#add').textContent='添加音符';$('#complete').checked=false;render();}]]){const b=document.createElement('button');b.textContent=label;b.onclick=action;td.append(b);}tr.append(td);rows.append(tr);});}
+$('#add').onclick=()=>{const n={pitch:Number($('#pitch').value),start:Number($('#start').value),end:Number($('#end').value),certainty:$('#certainty').value};if(!Number.isInteger(n.pitch)||n.pitch<21||n.pitch>108||!Number.isFinite(n.start)||!Number.isFinite(n.end)||n.start<0||n.end<=n.start||n.end>clips[selected].duration){status('未添加：起止须有效，结束晚于开始且不超过录音长度。');return;}if(editIndex===null)notes.push(n);else notes[editIndex]=n;notes.sort((a,b)=>a.start-b.start||a.pitch-b.pitch);editIndex=null;$('#add').textContent='添加音符';$('#complete').checked=false;render();status('已保存到本页；关闭前请下载JSON。');};
+function record(){const a=Number($('#scope-start').value),b=Number($('#scope-end').value);if(!Number.isFinite(a)||!Number.isFinite(b)||a<0||b<=a||b>clips[selected].duration)throw Error('核对范围无效。');return{schema:'aic-independent-review-v1',clip_id:clips[selected].id,audio_sha256:clips[selected].sha256,reviewer:$('#reviewer').value.trim(),created_at:new Date().toISOString(),source:'original user recording and independently read score; no model suggestions in this tool',scope:{start:a,end:b},independent:$('#independent').checked,complete:$('#complete').checked,comment:$('#comment').value,notes:notes.map(n=>({...n})),status:'draft'};}
+function download(name,data,type){const url=URL.createObjectURL(new Blob([data],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+$('#save').onclick=()=>{try{const r=record();download(r.clip_id+'-独立核对草稿.json',JSON.stringify(r,null,2),'application/json');status('JSON已保存；状态仍是草稿，不作为确认真值。');}catch(e){status(e.message);}};
+$('#csv').onclick=()=>{try{const r=record();if(!r.reviewer||!r.independent||!r.complete||!notes.length||notes.some(n=>n.certainty!=='confirmed'))throw Error('暂不能导出确认标注：请填匿名编号，独立核对全部范围，并处理每个待确认音符。可先保存草稿JSON。');if(notes.some(n=>n.start<r.scope.start||n.end>r.scope.end))throw Error('有音符跨出填写的范围；请扩大范围或重新确认边界。');r.status='human_confirmed_not_automatically_verified';download(r.clip_id+'-独立核对.csv','pitch,start,end\n'+notes.map(n=>[n.pitch,n.start,n.end].join(',')).join('\n')+'\n','text/csv;charset=utf-8');download(r.clip_id+'-独立核对.json',JSON.stringify(r,null,2),'application/json');status('已导出CSV与来源JSON。确认来自人的声明，不是软件自动保证正确；两份文件一起交回。');}catch(e){status(e.message);}};
+$('#restore').onchange=async()=>{try{const f=$('#restore').files[0];if(!f)return;const r=JSON.parse(await f.text()),c=clips[selected];if(r.schema!=='aic-independent-review-v1'||r.clip_id!==c.id||r.audio_sha256!==c.sha256||!Array.isArray(r.notes)||r.notes.length>1000)throw Error('记录与当前录音不匹配或格式无效。');for(const n of r.notes)if(!Number.isInteger(n.pitch)||n.pitch<21||n.pitch>108||!Number.isFinite(n.start)||!Number.isFinite(n.end)||n.start<0||n.end<=n.start||n.end>c.duration||!['confirmed','uncertain'].includes(n.certainty))throw Error('记录含无效音符。');if(!r.scope||!Number.isFinite(r.scope.start)||!Number.isFinite(r.scope.end)||r.scope.start<0||r.scope.end<=r.scope.start||r.scope.end>c.duration)throw Error('记录范围无效。');notes=r.notes;editIndex=null;$('#add').textContent='添加音符';$('#reviewer').value=r.reviewer||'';$('#scope-start').value=r.scope.start;$('#scope-end').value=r.scope.end;$('#independent').checked=false;$('#complete').checked=false;$('#comment').value=r.comment||'';render();status('已恢复音符；请重新确认独立性和完整范围。');}catch(e){status('恢复失败：'+e.message);}};
+load(0);
+</script></html>

@@ -1,0 +1,19 @@
+# Hosting blueprint only; creation and successful deployment still require Render.
+services:
+  - type: web
+    name: puyigai-aic
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: AIC_REQUIRE_AUTH
+        value: "1"
+      - key: AIC_ACCESS_USER
+        value: aic
+      - key: AIC_ACCESS_PASSWORD
+        generateValue: true
+      - key: AIC_EPHEMERAL_STORAGE
+        value: "1"
+      - key: AIC_PORT
+        value: "10000"

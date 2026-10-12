@@ -1,0 +1,13 @@
+{$SITE_DOMAIN} {
+    basic_auth {
+        {$AIC_LOGIN} {$AIC_PASSWORD_HASH}
+    }
+    request_body {
+        max_size 21MB
+    }
+    reverse_proxy app:8000 {
+        transport http {
+            response_header_timeout 180s
+        }
+    }
+}
