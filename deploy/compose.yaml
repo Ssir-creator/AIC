@@ -1,5 +1,8 @@
 services:
   app:
+    # Only Caddy publishes a port; it enforces the required login at the edge.
+    environment:
+      AIC_REQUIRE_AUTH: "0"
     build:
       context: ..
       dockerfile: Dockerfile

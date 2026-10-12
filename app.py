@@ -23,6 +23,10 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from site_security import access_gate
+from jianpu import parse_jianpu,KEYS
+from project_backup import make_backup,unpack_backup
+from independent_review import evaluate_review
+from typing import Literal
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("AIC_DATA_DIR", ROOT / "var"))
@@ -70,6 +74,28 @@ class Alignment(BaseModel):
         if self.timing_tolerance > self.window:
             raise ValueError("起音容差不能大于匹配时间窗口")
         return self
+
+
+class NumberedReference(BaseModel):
+    model_config=ConfigDict(extra='forbid',allow_inf_nan=False)
+    text: str=Field(min_length=1,max_length=12000)
+    key: str='D'
+    octave: int=Field(default=4,ge=3,le=5)
+    bpm: float=Field(default=60,ge=30,le=240)
+    confirmed: bool=False
+
+
+class IssueDecision(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    revision: int=Field(ge=0)
+    issue_id: str=Field(pattern=r'^[a-f0-9]{24}$')
+    verdict: Literal['recognition_error','performance_difference','alignment_problem','reference_problem','uncertain']
+    comment: str=Field(default='',max_length=500)
+
+
+class ReferenceNote(Note):
+    start: float=Field(ge=0,le=120)
+    end: float=Field(gt=0,le=120)
 
 
 def session_path(session_id: str) -> Path:
@@ -165,6 +191,8 @@ def public_project(project: dict) -> dict:
                                   for n in project["notes"]]}
     if project.get("reference"):
         result["practice"] = compare_reference(project["notes"], project["reference"], project["duration"])
+        for issue in result['practice']['issues']:
+            issue['human_review']=project.get('issue_reviews',{}).get(issue['id'])
     return result
 
 
@@ -298,6 +326,123 @@ def reference_upload(session_id: str, file: UploadFile):
         file.file.close()
 
 
+@app.post('/api/projects/{session_id}/reference/jianpu')
+def reference_numbered(session_id: str,entry: NumberedReference):
+    try:notes=parse_jianpu(entry.text,entry.key,entry.octave,entry.bpm)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    with EDIT_LOCK:
+        path=session_path(session_id);p=read_project(session_id)
+        before=p.get('reference')
+        p['reference']={'filename':'简谱文字录入','notes':notes,'settings':Alignment().model_dump(),
+                        'status':'user_confirmed_reference' if entry.confirmed else 'human_entered_unverified',
+                        'source':{'kind':'manual_numbered_notation','entry':entry.model_dump(),
+                                  'independent_ground_truth':False,'confirmation':'user declaration only'}}
+        p.setdefault('reference_history',[]).append({'timestamp':time.time(),'before':before,'after':p['reference']})
+        write_project(path,p)
+    return public_project(p)
+
+
+@app.put('/api/projects/{session_id}/issue-review')
+def review_issue(session_id: str,decision: IssueDecision):
+    with EDIT_LOCK:
+        path=session_path(session_id);p=read_project(session_id)
+        if decision.revision!=p['revision']:raise HTTPException(409,'音符结果已更新，请重新载入再核对')
+        if not p.get('reference'):raise HTTPException(422,'请先录入或导入参考')
+        comparison=compare_reference(p['notes'],p['reference'],p['duration'])
+        issue=next((i for i in comparison['issues'] if i['id']==decision.issue_id),None)
+        if issue is None:raise HTTPException(409,'差异或对齐已改变，请针对当前差异重新核对')
+        before=p.setdefault('issue_reviews',{}).get(decision.issue_id)
+        value={**decision.model_dump(),'timestamp':time.time(),'source':'human_listening_decision','issue_snapshot':issue}
+        p['issue_reviews'][decision.issue_id]=value
+        p.setdefault('issue_review_history',[]).append({'before':before,'after':value})
+        write_project(path,p)
+    return public_project(p)
+
+
+@app.get('/api/projects/{session_id}/backup')
+def backup_project(session_id: str):
+    with EDIT_LOCK:
+        try:data=make_backup(session_path(session_id),read_project(session_id))
+        except ValueError as exc:raise HTTPException(422,str(exc))
+    return Response(data,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="puyigai-project-backup.zip"'})
+
+
+@app.post('/api/projects/restore')
+def restore_project(file: UploadFile):
+    import shutil
+    folder=None
+    success=False
+    try:
+        content=file.file.read(32*1024*1024+1)
+        if len(content)>32*1024*1024:raise HTTPException(413,'备份不能超过32MB')
+        p,files=unpack_backup(content)
+        if not isinstance(p.get('filename'),str) or not 1<=len(p['filename'])<=255:
+            raise ValueError('备份文件名无效')
+        if not isinstance(p.get('model'),str) or not isinstance(p.get('inference_seconds'),(int,float)) or not 0<=p['inference_seconds']<=3600:
+            raise ValueError('备份模型信息无效')
+        if type(p.get('revision')) is not int or not 0<=p['revision']<=100000:
+            raise ValueError('备份版本无效')
+        for key in ['notes','original_notes']:
+            if not isinstance(p.get(key),list) or len(p[key])>2000:raise ValueError('备份音符无效')
+            p[key]=[Note.model_validate(n).model_dump() for n in p[key]]
+            if len({n['id'] for n in p[key]})!=len(p[key]):raise ValueError('备份音符编号重复')
+        if not isinstance(p.get('history'),list) or len(p['history'])>2000:raise ValueError('备份编辑历史无效')
+        ref=p.get('reference')
+        if ref:
+            if not isinstance(ref,dict):raise ValueError('备份参考格式无效')
+            if not isinstance(ref.get('notes'),list) or not 1<=len(ref['notes'])<=500:raise ValueError('备份参考无效')
+            ref['notes']=[ReferenceNote.model_validate(n).model_dump() for n in ref['notes']]
+            ref['settings']=Alignment.model_validate(ref['settings']).model_dump()
+            if ref.get('automatic_alignment'):
+                ref['automatic_alignment']=auto_align(ref['notes'],p['original_notes'])
+        reviews=p.get('issue_reviews',{})
+        if not isinstance(reviews,dict) or len(reviews)>3000:raise ValueError('备份核对记录无效')
+        for key,value in reviews.items():
+            IssueDecision.model_validate({field:value[field] for field in ['revision','issue_id','verdict','comment']})
+            if key!=value['issue_id']:raise ValueError('核对记录编号不匹配')
+        folder=DATA/str(uuid.uuid4());folder.mkdir()
+        stored=folder/'restoring.wav';stored.write_bytes(files['audio.wav'])
+        duration=normalize_audio(stored,folder/'audio.wav');stored.unlink()
+        if abs(duration-float(p['duration']))>.01:raise ValueError('备份录音时长不匹配')
+        if any(n['end']>duration+.001 for key in ['notes','original_notes'] for n in p[key]):raise ValueError('备份音符超出录音')
+        if 'source.audio' in files:(folder/'source').write_bytes(files['source.audio'])
+        old_id=p.get('id');p['id']=folder.name;p['restored_from']={'id':old_id,'timestamp':time.time(),'verification':'file hashes and structure, not musical correctness'}
+        if ref:compare_reference(p['notes'],ref,duration)
+        write_project(folder,p)
+        success=True
+        return public_project(p)
+    except (ValueError,KeyError,TypeError) as exc:
+        if folder:shutil.rmtree(folder,ignore_errors=True)
+        raise HTTPException(422,'备份恢复失败：'+str(exc))
+    finally:
+        file.file.close()
+        if folder and not success:shutil.rmtree(folder,ignore_errors=True)
+
+
+@app.post('/api/projects/{session_id}/evaluation')
+def independent_evaluation(session_id: str,file: UploadFile):
+    try:
+        content=file.file.read(1024*1024+1)
+        if len(content)>1024*1024:raise HTTPException(413,'独立核对记录不能超过1MB')
+        review=json.loads(content)
+        if not isinstance(review,dict):raise ValueError('核对记录须为JSON对象')
+        with EDIT_LOCK:
+            path=session_path(session_id);p=read_project(session_id)
+            digest=p.get('audio_sha256')
+            if not digest or not (path/'source').is_file():raise ValueError('旧项目未保存原始上传来源，请重新上传对应原音生成项目')
+            if hashlib.sha256((path/'source').read_bytes()).hexdigest()!=digest:raise ValueError('原始音频来源校验失败')
+            scope=review.get('scope')
+            if not isinstance(scope,dict) or not isinstance(scope.get('end'),(int,float)) or scope['end']>p['duration']+.001:
+                raise ValueError('完整核对范围不能超出原录音')
+            result=evaluate_review(p,review,digest)
+            result.update(note_revision=p['revision'],timestamp=time.time())
+            p['independent_evaluation']=result
+            write_project(path,p)
+        return result
+    except (ValueError,KeyError,TypeError) as exc:raise HTTPException(422,'不能进行独立评测：'+str(exc))
+    finally:file.file.close()
+
+
 @app.put("/api/projects/{session_id}/reference/alignment")
 def reference_align(session_id: str, alignment: Alignment):
     with EDIT_LOCK:
@@ -374,10 +519,10 @@ def report(session_id: str):
 
 @app.get("/api/projects/{session_id}/musicxml")
 def score(session_id: str, bpm: float = Query(120, ge=30, le=240),
-          meter: str = "4/4", origin: float = Query(0, ge=0, le=60), original: bool = False):
+          meter: str = "4/4", origin: float = Query(0, ge=0, le=60), original: bool = False, grid: str='sixteenth'):
     p = read_project(session_id)
     try:
-        content = export_musicxml(p["original_notes"] if original else p["notes"], bpm, meter, origin)
+        content = export_musicxml(p["original_notes"] if original else p["notes"], bpm, meter, origin,grid=grid)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return Response(content, media_type="application/vnd.recordare.musicxml+xml",

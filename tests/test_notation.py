@@ -3,6 +3,17 @@ import pytest
 from notation import export_musicxml
 
 
+def test_triplet_grid_preserves_three_equal_notes_and_ratio():
+    import xml.etree.ElementTree as ET
+    notes=[{'pitch':60+i,'start':i/3,'end':(i+1)/3} for i in range(3)]
+    root=ET.fromstring(export_musicxml(notes,bpm=60,grid='eighth_triplet'))
+    assert root.findtext('.//divisions')=='3'
+    pitched=root.findall('.//note[pitch]')
+    assert len(pitched)==3
+    assert all(n.findtext('duration')=='1' and n.findtext('type')=='eighth' for n in pitched)
+    assert all(n.findtext('time-modification/actual-notes')=='3' and n.findtext('time-modification/normal-notes')=='2' for n in pitched)
+
+
 def n(pitch, start, end):
     return {'pitch': pitch, 'start': start, 'end': end}
 

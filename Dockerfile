@@ -1,12 +1,12 @@
 FROM python:3.12-slim
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 AIC_HOST=0.0.0.0 AIC_PORT=8000
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 AIC_HOST=0.0.0.0 AIC_PORT=8000 AIC_REQUIRE_AUTH=1
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.lock ./
 COPY scripts/install.py scripts/install.py
 # install.py loads the actual model, so copy the runtime before installation.
-COPY app.py notation.py practice.py alignment.py site_security.py ./
+COPY app.py notation.py practice.py alignment.py site_security.py jianpu.py project_backup.py independent_review.py evaluation.py ./
 COPY web/ web/
 COPY scripts/start.py scripts/start.py
 COPY third_party/ third_party/

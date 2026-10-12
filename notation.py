@@ -19,14 +19,18 @@ def sub(parent, tag, text=None, **attrs):
     return element
 
 
-def export_musicxml(notes, bpm=120., meter='4/4', origin=0., title='Reviewed note draft'):
+def export_musicxml(notes, bpm=120., meter='4/4', origin=0., title='Reviewed note draft', grid='sixteenth'):
     if not math.isfinite(bpm) or not 30 <= bpm <= 240 or meter not in METERS:
         raise ValueError('速度须为30—240 BPM，拍号为2/4、3/4、4/4或6/8')
     if not math.isfinite(origin) or not 0 <= origin <= 60:
         raise ValueError('起拍时间须为0—60秒')
+    if grid not in ('sixteenth','eighth_triplet'):
+        raise ValueError('请选择十六分音符或八分三连音网格')
+    divisions=4 if grid=='sixteenth' else 3
+    values=VALUES if grid=='sixteenth' else [(12,'whole',False),(6,'half',False),(3,'quarter',False),(2,'quarter',False),(1,'eighth',False)]
     beats, beat_type = METERS[meter]
-    measure_units = beats * 16 // beat_type
-    scale = bpm / 60 * 4
+    measure_units = beats * divisions * 4 // beat_type
+    scale = bpm / 60 * divisions
     quantized = []
     for n in notes:
         if n['end'] <= origin:
@@ -53,7 +57,7 @@ def export_musicxml(notes, bpm=120., meter='4/4', origin=0., title='Reviewed not
     sub(identification, 'creator', '谱易改 / Spotify Basic Pitch + manual review', type='software')
     miscellaneous = sub(identification, 'miscellaneous')
     for name, value in [('bpm-quarter-note', bpm), ('meter', meter),
-                        ('audio-origin-seconds', origin), ('grid', 'sixteenth-note'),
+                        ('audio-origin-seconds', origin), ('grid', grid),
                         ('beat-detection', 'none: user configured')]:
         sub(miscellaneous, 'miscellaneous-field', value, name=name)
     part_list = sub(root, 'part-list')
@@ -63,7 +67,7 @@ def export_musicxml(notes, bpm=120., meter='4/4', origin=0., title='Reviewed not
     def segment(measure, start, end, pitch, voice, full_start=None, full_end=None):
         cursor = start
         while cursor < end:
-            length, type_, dotted = next(v for v in VALUES if v[0] <= end - cursor)
+            length, type_, dotted = next(v for v in values if v[0] <= end - cursor)
             note = sub(measure, 'note')
             if pitch is None:
                 sub(note, 'rest')
@@ -85,6 +89,11 @@ def export_musicxml(notes, bpm=120., meter='4/4', origin=0., title='Reviewed not
                     sub(note, 'tie', type=tie)
             sub(note, 'voice', voice)
             sub(note, 'type', type_)
+            if grid=='eighth_triplet' and length in (1,2):
+                modification=sub(note,'time-modification')
+                sub(modification,'actual-notes',3)
+                sub(modification,'normal-notes',2)
+                sub(modification,'normal-type',type_)
             if dotted:
                 sub(note, 'dot')
             if ties:
@@ -97,7 +106,7 @@ def export_musicxml(notes, bpm=120., meter='4/4', origin=0., title='Reviewed not
         measure = sub(part, 'measure', number=index + 1)
         if index == 0:
             attributes = sub(measure, 'attributes')
-            sub(attributes, 'divisions', 4)
+            sub(attributes, 'divisions', divisions)
             sub(sub(attributes, 'key'), 'fifths', 0)
             time = sub(attributes, 'time')
             sub(time, 'beats', beats)
@@ -107,7 +116,7 @@ def export_musicxml(notes, bpm=120., meter='4/4', origin=0., title='Reviewed not
             sub(clef, 'line', 2)
             direction = sub(measure, 'direction', placement='above')
             sub(sub(direction, 'direction-type'), 'words',
-                'Draft / 1/16 grid')
+                'Draft / 1/16 grid' if grid=='sixteenth' else 'Draft / triplet grid')
             sub(direction, 'sound', tempo=bpm)
         left, right = index * measure_units, (index + 1) * measure_units
         for voice_id, voice in enumerate(voices, 1):

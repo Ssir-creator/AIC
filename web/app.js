@@ -24,7 +24,7 @@ function render() {
   for (const id of ['start','end','loop-start','loop-end','score-origin']) $(id).max=project.duration;
   const base = `/api/projects/${project.id}`;
   $("export-midi").href = base + "/midi"; $("original-midi").href = base + "/midi?original=true";
-  $("export-report").href = base + "/report";
+  $("export-report").href = base + "/report"; $("export-backup").href=base+"/backup";
   if (!$("original-audio").src.endsWith(base + "/audio")) $("original-audio").src = base + "/audio";
   $("model-time").textContent = `本次模型推理用时 ${project.inference_seconds}s（不含音频解码与传输）。建议检查来自短音符/弱音符规则，不是模型置信度。`;
   $("notes-body").replaceChildren();
@@ -41,6 +41,7 @@ function render() {
   if (!shown.length) { const tr = document.createElement("tr"); const td = cell(tr, project.notes.length ? "当前筛选下无音符" : "未识别到音符，可以补音符或换更清晰的录音"); td.colSpan = 4; $("notes-body").appendChild(tr); }
   drawTimeline();
   renderPractice();
+  renderEvaluation();
   $("undo").disabled = !undoStack.length || editing;
   $("delete-note").disabled = !selected || editing;
   $("listen-note").disabled = !selected;
@@ -197,7 +198,7 @@ async function downloadScore(original) {
   if (!project) return;
   const fields = [$("score-bpm"), $("score-origin")];
   if (!fields.every(field => field.value !== "" && field.reportValidity())) return;
-  const params = new URLSearchParams({bpm:$("score-bpm").value,meter:$("score-meter").value,origin:$("score-origin").value,original});
+  const params = new URLSearchParams({bpm:$("score-bpm").value,meter:$("score-meter").value,origin:$("score-origin").value,grid:$("score-grid").value,original});
   try {
     const response = await fetch(`/api/projects/${project.id}/musicxml?${params}`);
     if (!response.ok) { const body = await response.json(); throw new Error(typeof body.detail === "string" ? body.detail : "请检查速度、拍号和起拍位置"); }
@@ -214,7 +215,7 @@ function renderPractice() {
   const reference = project.reference, comparison = project.practice;
   $("reference-workspace").hidden = !reference;
   if (!reference || !comparison) return;
-  $("reference-name").textContent = `参考曲谱：${reference.filename} / ${reference.notes.length}个音符${reference.status === "unverified_score_outline" ? " / 草稿待确认：八度与节奏未核实" : ""}`;
+  $("reference-name").textContent = `参考曲谱：${reference.filename} / ${reference.notes.length}个音符${["unverified_score_outline","human_entered_unverified"].includes(reference.status) ? " / 草稿待确认：请核对八度与节奏" : reference.status === "user_confirmed_reference" ? " / 本人声明已核对，不是独立真值" : ""}`;
   const settings=reference.settings;
   for (const [id,key] of [["reference-scale","scale"],["reference-shift","shift"],["reference-window","window"],["reference-timing","timing_tolerance"],["reference-duration","duration_tolerance"]]) $(id).value=settings[key];
   const automatic=comparison.automatic_alignment;
@@ -222,6 +223,7 @@ function renderPractice() {
   const counts=comparison.counts;
   $("practice-summary").textContent = `音高差异 ${counts.pitch} · 起音差异 ${counts.timing ?? "未评定"} · 时长差异 ${counts.duration ?? "未评定"} · 参考有当前无 ${counts.missing} · 当前有参考无 ${counts.extra}`;
   $("practice-excluded").textContent = `已配对 ${comparison.matched_pairs} 对；${comparison.excluded_reference_notes} 个参考音符超出对齐后的录音范围，未参与比较。录音另有 ${comparison.uncompared_recording_notes || 0} 个音符未在当前范围比较。以下为待确认差异，不是演奏成绩。`;
+  $("human-review-summary").textContent=`当前差异 ${comparison.issues.length} 项，已有人工标记 ${comparison.issues.filter(i=>i.human_review && i.human_review.verdict!=="uncertain").length} 项。修改音符或对齐后需重新核对；历史判断保留在记录中。`;
   $("practice-body").replaceChildren();
   const labels={pitch:"音高差异",timing:"起音差异",duration:"时长差异",missing:"参考有、当前无",extra:"当前有、参考无"};
   for (const issue of comparison.issues) {
@@ -238,7 +240,15 @@ function renderPractice() {
       $("original-audio").scrollIntoView({behavior:"smooth",block:"center"});
       status("已定位差异位置，请播放原音确认，再决定是否修改音符初稿。");
     };
-    action.appendChild(button);$("practice-body").appendChild(tr);
+    action.appendChild(button);
+    const form=document.createElement('form');form.className='issue-decision';
+    const verdict=document.createElement('select');verdict.setAttribute('aria-label','人工核对结果');
+    for(const [value,text] of [['uncertain','暂不确定'],['recognition_error','AI识别问题'],['performance_difference','演奏与参考不同'],['alignment_problem','对齐问题'],['reference_problem','参考曲谱问题']])verdict.add(new Option(text,value));
+    verdict.value=issue.human_review?.verdict||'uncertain';
+    const comment=document.createElement('input');comment.maxLength=500;comment.placeholder='听音依据或不同意见（可选）';comment.setAttribute('aria-label','核对依据');comment.value=issue.human_review?.comment||'';
+    const save=document.createElement('button');save.textContent='保存判断';save.type='submit';save.className='secondary';
+    form.append(verdict,comment,save);form.onsubmit=async e=>{e.preventDefault();save.disabled=true;try{project=await request(`/api/projects/${project.id}/issue-review`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:project.revision,issue_id:issue.id,verdict:verdict.value,comment:comment.value})});render();status('已保存人工核对判断；没有自动修改音符或将判断当作模型真值。');}catch(e){status(e.message,'error');save.disabled=false;}};
+    action.append(form);$("practice-body").appendChild(tr);
   }
   if (!comparison.issues.length) { const tr=document.createElement("tr");cell(tr,"当前对齐与容差下没有差异，仍需听音确认；不代表演奏完全正确。").colSpan=4;$("practice-body").appendChild(tr); }
 }
@@ -316,9 +326,9 @@ $('toggle-loop').onclick=async()=>{if(looping){stopLoop();$('original-audio').pa
 for(const id of ['loop-start','loop-end'])$(id).oninput=stopLoop;
 $('original-audio').addEventListener('timeupdate',()=>{if(looping&&!$('original-audio').paused){const [a,b]=loopRange();if($('original-audio').currentTime>=b)$('original-audio').currentTime=a;}});
 $('original-audio').addEventListener('ended',()=>{if(looping){$('original-audio').currentTime=Number($('loop-start').value);$('original-audio').play().catch(()=>stopLoop());}});
-function scoreKey(){return project ? [project.id,project.revision,$('score-bpm').value,$('score-meter').value,$('score-origin').value,$('score-source').value].join(':') : null;}
+function scoreKey(){return project ? [project.id,project.revision,$('score-bpm').value,$('score-meter').value,$('score-origin').value,$('score-source').value,$('score-grid').value].join(':') : null;}
 function invalidatePreview(){const previous=previewKey||previewPendingKey;if(previous && previous!==scoreKey()){previewToken++;previewKey=null;previewPendingKey=null;$('preview-score').disabled=false;$('score-preview').hidden=true;$('score-preview-status').textContent='音符或制谱设置已改变，请重新生成预览。';}}
-for(const id of ['score-bpm','score-meter','score-origin','score-source'])$(id).addEventListener('input',invalidatePreview);
+for(const id of ['score-bpm','score-meter','score-origin','score-source','score-grid'])$(id).addEventListener('input',invalidatePreview);
 $('preview-score').onclick=async()=>{
  if(!project)return;
  if(![$('score-bpm'),$('score-origin')].every(f=>f.value!==''&&f.reportValidity()))return;
@@ -326,7 +336,7 @@ $('preview-score').onclick=async()=>{
  previewPendingKey=key;
  $('preview-score').disabled=true;$('score-preview-status').textContent='正在整理小节并生成五线谱草稿…';$('score-preview').hidden=true;
  try{
-  const params=new URLSearchParams({bpm:$('score-bpm').value,meter:$('score-meter').value,origin:$('score-origin').value,original:$('score-source').value});
+  const params=new URLSearchParams({bpm:$('score-bpm').value,meter:$('score-meter').value,origin:$('score-origin').value,grid:$('score-grid').value,original:$('score-source').value});
   const response=await fetch(`/api/projects/${project.id}/musicxml?${params}`);
   if(!response.ok){const error=await response.json();throw Error(typeof error.detail==='string'?error.detail:'请检查制谱设置');}
   const xml=await response.text();if(token!==previewToken||key!==scoreKey())return;
@@ -335,7 +345,7 @@ $('preview-score').onclick=async()=>{
   await display.load(xml);if(token!==previewToken||key!==scoreKey()){$('score-preview').hidden=true;return;}
   display.render();previewKey=key;
   status('五线谱草稿已生成，可对照原音继续校对或导出。');
-  $('score-preview-status').textContent=`${$('score-source').value==='true'?'原始模型初稿':'当前校对结果'} / 四分音符 ${$('score-bpm').value} BPM / ${$('score-meter').value} / 起拍 ${$('score-origin').value}s。固定十六分网格的五线谱草稿；技法和原曲节奏仍需确认。`;
+  $('score-preview-status').textContent=`${$('score-source').value==='true'?'原始模型初稿':'当前校对结果'} / 四分音符 ${$('score-bpm').value} BPM / ${$('score-meter').value} / 起拍 ${$('score-origin').value}s。${$('score-grid').value==='sixteenth'?'十六分音符':'三连音'}网格的五线谱草稿；技法和原曲节奏仍需确认。`;
  }catch(e){if(token===previewToken){$('score-preview').hidden=true;$('score-preview-status').textContent='预览未生成：'+e.message;}}
  finally{if(token===previewToken){previewPendingKey=null;$('preview-score').disabled=false;}}
 };
@@ -351,3 +361,30 @@ $('mark-note-start').onclick=()=>{$('start').value=$('original-audio').currentTi
 $('mark-note-end').onclick=()=>{$('end').value=$('original-audio').currentTime.toFixed(3);};
 
 (async()=>{try{const state=await request('/api/health');$('storage-notice').hidden=!state.ephemeral_storage;}catch(_){}})();
+
+$('jianpu-form').onsubmit=async event=>{
+ event.preventDefault();if(!project)return;$('jianpu-submit').disabled=true;
+ try{project=await request(`/api/projects/${project.id}/reference/jianpu`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('jianpu-text').value,key:$('jianpu-key').value,octave:Number($('jianpu-octave').value),bpm:Number($('jianpu-bpm').value),confirmed:$('jianpu-confirmed').checked})});render();status('已生成简谱参考。请试听并确认八度、拍数，再对齐录音。');}
+ catch(e){status(e.message,'error');}finally{$('jianpu-submit').disabled=false;}
+};
+$('restore-form').onsubmit=async event=>{
+ event.preventDefault();if(editing||$('upload-button').disabled){status('请等当前操作结束后再恢复。');return;}
+ const file=$('restore-file').files[0];if(!file)return;
+ if(file.size>32*1024*1024){status('备份超过32MB','error');return;}
+ const body=new FormData();body.append('file',file);$('restore-project').disabled=true;status('正在校验并恢复完整项目…','busy');
+ try{const next=await request('/api/projects/restore',{method:'POST',body});stopSynth();stopLoop();$('original-audio').pause();project=next;selected=null;undoStack=[];setTab('notes');localStorage.setItem('pu-yigai-project',project.id);render();refreshProjects();status('已恢复为新项目，现有项目未被覆盖。恢复操作不重新训练或推理。');}
+ catch(e){status(e.message,'error');}finally{$('restore-project').disabled=false;}
+};
+
+function renderEvaluation(){
+ const result=project?.independent_evaluation;
+ if(!result){$('evaluation-summary').textContent='尚无独立评测结果。不会以参考差异数量或人工修改次数代替准确率。';return;}
+ $('evaluation-summary').textContent=`核对范围 ${result.scope.start}—${result.scope.end}秒 / 独立参考 ${result.reference_notes}音符 / 模型起音与音高F1 ${result.model_draft.onset_only.f1.toFixed(3)} / 当前结果F1 ${result.human_reviewed.onset_only.f1.toFixed(3)}。${result.note_revision!==project.revision?'音符已修改，这是旧版本评测，请重新验证。':'这是该片段的评测，不可推广为所有琵琶准确率；人工修改不代表基础模型提升。'}`;
+}
+$('evaluation-form').onsubmit=async event=>{
+ event.preventDefault();if(!project)return;const file=$('evaluation-file').files[0];if(!file)return;
+ if(file.size>1024*1024){status('独立记录超过1MB','error');return;}
+ const body=new FormData();body.append('file',file);$('run-evaluation').disabled=true;
+ try{await request(`/api/projects/${project.id}/evaluation`,{method:'POST',body});project=await request(`/api/projects/${project.id}`);render();status('独立范围评测已保存到校对记录；模型与人工结果分别报告。');}
+ catch(e){status(e.message,'error');}finally{$('run-evaluation').disabled=false;}
+};

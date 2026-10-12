@@ -1,6 +1,8 @@
 """Reference-guided comparison, not a diagnosis of playing or transcription errors."""
 import io
 import math
+import hashlib
+import json
 import numpy as np
 import pretty_midi
 from scipy.optimize import linear_sum_assignment
@@ -86,6 +88,9 @@ def compare_reference(notes, reference, duration):
             issues.append({'kind':'extra','note_id':n['id'],'actual':n,'time':n['start']})
     if automatic:
         counts['timing']=counts['duration']=None
+    context={'notes':reference['notes'],'settings':settings,'automatic':automatic}
+    for issue in issues:
+        issue['id']=hashlib.sha256(json.dumps({'context':context,'issue':issue},sort_keys=True).encode()).hexdigest()[:24]
     return {'settings':settings,'expected_notes':expected,'excluded_reference_notes':excluded,
             'uncompared_recording_notes':len(all_notes)-len(notes),
             'automatic_alignment':automatic,
