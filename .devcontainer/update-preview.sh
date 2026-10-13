@@ -5,6 +5,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
 git pull --ff-only origin main
+python -m pip install -r requirements.txt
 if [ -f /tmp/tusu-preview.pid ]; then
   kill "$(cat /tmp/tusu-preview.pid)" 2>/dev/null || true
   rm -f /tmp/tusu-preview.pid

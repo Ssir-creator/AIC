@@ -21,7 +21,7 @@ MODEL_LOCK = threading.Lock()
 DB_LOCK = threading.Lock()
 
 
-def builtin_embed(image, bits, strength=10.0):
+def builtin_embed(image, bits, strength=1.5):
     """Embed a short repeated payload using regional luminance differences.
 
     This lightweight local method exists so the complete product workflow can be
@@ -33,22 +33,27 @@ def builtin_embed(image, bits, strength=10.0):
     if min(width, height) < 128:
         raise ValueError('图片宽高至少为128像素。')
     luminance = rgb.mean(axis=2)
-    for cell in range(64):
-        row, col = divmod(cell, 8)
-        y0, y1 = round(row * height / 8), round((row + 1) * height / 8)
-        x0, x1 = round(col * width / 8), round((col + 1) * width / 8)
-        mid = (x0 + x1) // 2
-        left = luminance[y0:y1, x0:mid]
-        right = luminance[y0:y1, mid:x1]
-        if not left.size or not right.size:
+    grid = 32
+    for cell in range(grid * grid):
+        row, col = divmod(cell, grid)
+        y0, y1 = round(row * height / grid), round((row + 1) * height / grid)
+        x0, x1 = round(col * width / grid), round((col + 1) * width / grid)
+        vertical = (row + col) % 2 == 0
+        if vertical:
+            mid = (x0 + x1) // 2
+            first, second = luminance[y0:y1, x0:mid], luminance[y0:y1, mid:x1]
+            first_rgb, second_rgb = rgb[y0:y1, x0:mid], rgb[y0:y1, mid:x1]
+        else:
+            mid = (y0 + y1) // 2
+            first, second = luminance[y0:mid, x0:x1], luminance[mid:y1, x0:x1]
+            first_rgb, second_rgb = rgb[y0:mid, x0:x1], rgb[mid:y1, x0:x1]
+        if not first.size or not second.size:
             continue
-        current = float(left.mean() - right.mean())
-        target = strength if bits[cell % len(bits)] else -strength
-        correction = (target - current) / 2
-        rgb[y0:y1, x0:mid] += correction
-        rgb[y0:y1, mid:x1] -= correction
-        luminance[y0:y1, x0:mid] += correction
-        luminance[y0:y1, mid:x1] -= correction
+        correction = strength if bits[(cell * 13) % len(bits)] else -strength
+        first_rgb += correction
+        second_rgb -= correction
+        first += correction
+        second -= correction
     return Image.fromarray(np.uint8(np.clip(rgb, 0, 255)))
 
 
@@ -58,15 +63,20 @@ def builtin_detect(image, expected_bits):
     luminance = rgb.mean(axis=2)
     votes = [[] for _ in expected_bits]
     margins = []
-    for cell in range(64):
-        row, col = divmod(cell, 8)
-        y0, y1 = round(row * height / 8), round((row + 1) * height / 8)
-        x0, x1 = round(col * width / 8), round((col + 1) * width / 8)
-        mid = (x0 + x1) // 2
-        left, right = luminance[y0:y1, x0:mid], luminance[y0:y1, mid:x1]
-        if left.size and right.size:
-            diff = float(left.mean() - right.mean())
-            votes[cell % len(expected_bits)].append(1 if diff >= 0 else 0)
+    grid = 32
+    for cell in range(grid * grid):
+        row, col = divmod(cell, grid)
+        y0, y1 = round(row * height / grid), round((row + 1) * height / grid)
+        x0, x1 = round(col * width / grid), round((col + 1) * width / grid)
+        if (row + col) % 2 == 0:
+            mid = (x0 + x1) // 2
+            first, second = luminance[y0:y1, x0:mid], luminance[y0:y1, mid:x1]
+        else:
+            mid = (y0 + y1) // 2
+            first, second = luminance[y0:mid, x0:x1], luminance[mid:y1, x0:x1]
+        if first.size and second.size:
+            diff = float(first.mean() - second.mean())
+            votes[(cell * 13) % len(expected_bits)].append(1 if diff >= 0 else 0)
             margins.append(abs(diff))
     recovered = [int(sum(v) >= len(v) / 2) for v in votes]
     accuracy = sum(a == b for a, b in zip(recovered, expected_bits)) / len(expected_bits)

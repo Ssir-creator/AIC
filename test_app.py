@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from PIL import Image
+import numpy as np
 import app
 
 
@@ -87,11 +88,17 @@ class WorkflowTests(unittest.TestCase):
         source = 'data:image/png;base64,' + base64.b64encode(stream.getvalue()).decode()
         result = app.handle('watermark', {'image': source, 'method': 'builtin',
                                           'title': 'Local workflow test'})
+        with Image.open(app.DATA / (result['id'] + '.png')) as marked:
+            original_pixels = np.asarray(image, dtype=np.float32)
+            marked_pixels = np.asarray(marked, dtype=np.float32)
+        mse = float(np.mean((original_pixels - marked_pixels) ** 2))
+        psnr = 10 * np.log10(255 ** 2 / mse)
         original = app.handle('detect', {'id': result['id'], 'operation': 'original'})
         compressed = app.handle('detect', {'id': result['id'], 'operation': 'jpeg50'})
         self.assertTrue(original['detected'])
         self.assertTrue(compressed['detected'])
         self.assertGreaterEqual(compressed['bit_accuracy'], .875)
+        self.assertGreaterEqual(psnr, 40, '内置水印不得产生明显可见的块状失真')
         self.assertEqual(app.database()[result['id']]['method'], 'builtin')
 
 
