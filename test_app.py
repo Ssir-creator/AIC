@@ -101,6 +101,32 @@ class WorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(psnr, 40, '内置水印不得产生明显可见的块状失真')
         self.assertEqual(app.database()[result['id']]['method'], 'builtin')
 
+    def test_uploaded_trace_matches_without_record_or_operation(self):
+        stream = io.BytesIO()
+        Image.new('RGB', (512, 512), '#7799bb').save(stream, format='PNG')
+        source = 'data:image/png;base64,' + base64.b64encode(stream.getvalue()).decode()
+        created = app.handle('watermark', {'image': source, 'method': 'builtin'})
+        marked = (app.DATA / (created['id'] + '.png')).read_bytes()
+        uploaded = 'data:image/png;base64,' + base64.b64encode(marked).decode()
+        result = app.handle('trace', {'image': uploaded})
+        self.assertEqual(result['state'], 'matched')
+        self.assertEqual(result['record']['id'], created['id'])
+        self.assertNotIn('expected_bits', result['record'])
+        self.assertTrue(any(k.startswith('upload-') for k in app.database()[created['id']]['results']))
+        self.assertEqual(app.handle('trace', {'image': source})['state'], 'unmatched')
+
+    def test_uploaded_trace_reports_ambiguity(self):
+        stream = io.BytesIO()
+        Image.new('RGB', (512, 512), '#7799bb').save(stream, format='PNG')
+        source = 'data:image/png;base64,' + base64.b64encode(stream.getvalue()).decode()
+        created = app.handle('watermark', {'image': source, 'method': 'builtin'})
+        duplicate = dict(app.database()[created['id']])
+        duplicate['id'] = 'duplicate-record'
+        app.save_record(duplicate)
+        marked = (app.DATA / (created['id'] + '.png')).read_bytes()
+        uploaded = 'data:image/png;base64,' + base64.b64encode(marked).decode()
+        self.assertEqual(app.handle('trace', {'image': uploaded})['state'], 'ambiguous')
+
 
 if __name__ == '__main__':
     unittest.main()

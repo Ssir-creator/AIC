@@ -146,6 +146,44 @@ def execute(method, request):
 
 
 def handle(action, q):
+    if action == 'trace':
+        raw = base64.b64decode(q['image'].split(',', 1)[1], validate=True)
+        image = Image.open(io.BytesIO(raw)).convert('RGB')
+        upload_id = 'upload-' + uuid.uuid4().hex
+        path = DATA / (upload_id + '.png')
+        image.save(path)
+        matches = []
+        errors = []
+        registered = database()
+        trustmark_records = [r for r in registered.values() if r['method'] == 'trustmark']
+        for record in registered.values():
+            if record['method'] != 'builtin':
+                continue
+            value = builtin_detect(image, record['expected_bits'])
+            if value['full_message_match']:
+                matches.append((record, value))
+        if trustmark_records:
+            try:
+                value = execute('trustmark', {'action': 'detect', 'image': str(path)})
+                message = value.get('message')
+                for record in trustmark_records:
+                    if value.get('detected') and message == record['id'][:8]:
+                        matches.append((record, value))
+            except Exception as exc:
+                errors.append(str(exc))
+        if len(matches) == 1:
+            record, value = matches[0]
+            result = {**value, 'state': 'executed', 'image': '/images/' + path.name,
+                      'operation': 'uploaded', 'checked': datetime.now(timezone.utc).isoformat()}
+            record['results'][upload_id] = result
+            save_record(record)
+            return {'state': 'matched', 'record': {k: v for k, v in record.items()
+                    if k not in ('expected_bits', 'results')}, 'image': result['image'],
+                    'note': '匹配到登记标识；短标识匹配仅提供来源线索，仍需人工核对。'}
+        return {'state': 'ambiguous' if len(matches) > 1 else 'unmatched',
+                'image': '/images/' + path.name, 'errors': errors,
+                'note': '找到多个可能的登记记录，请人工复核。' if len(matches) > 1 else
+                '未找到可关联的登记标识。图片可能未经登记、标识已受损或使用了尚未支持的检测方法。'}
     if action == 'watermark':
         raw = base64.b64decode(q['image'].split(',', 1)[1], validate=True)
         image = Image.open(io.BytesIO(raw)).convert('RGB')

@@ -19,6 +19,7 @@ def run(q):
             return {'image': q['output'], 'seconds': time.perf_counter() - start}
         message, present, schema = model.decode(image)
         return {'detected': bool(present), 'schema': schema,
+                'message': message,
                 'seconds': time.perf_counter() - start}
     import torch
     repo = Path(q['repo']).resolve()
