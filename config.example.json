@@ -1,0 +1,22 @@
+{
+  "trustmark": {
+    "python": "/absolute/path/to/trustmark-environment/bin/python",
+    "model_type": "Q"
+  },
+  "spherical": {
+    "python": "/absolute/path/to/spherical-environment/bin/python",
+    "repo": "/absolute/path/to/SphericalWatermark",
+    "model": "/absolute/path/to/local/stable-diffusion-2-1-base",
+    "key": "/absolute/path/to/private/spherical-signature.pkl",
+    "device": "cuda:0",
+    "steps": 50
+  },
+  "prc": {
+    "python": "/absolute/path/to/prc-environment/bin/python",
+    "repo": "/absolute/path/to/PRC-Watermark",
+    "model": "/absolute/path/to/local/stable-diffusion-2-1-base",
+    "key": "/absolute/path/to/private/prc-key.pkl",
+    "device": "cuda:0",
+    "steps": 50
+  }
+}
