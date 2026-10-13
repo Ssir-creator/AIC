@@ -17,6 +17,10 @@ python app.py --host 0.0.0.0 --port 8765
 
 仓库根目录包含 `render.yaml`。Render 会安装 Pillow 和 NumPy，运行 `app.py`，并通过 `/health` 检查服务状态。
 
+## Codespaces 在线预览
+
+在 GitHub 仓库点击 **Code → Codespaces → Create codespace on main**。容器会自动安装依赖、运行测试、启动端口 8765，并在浏览器打开完整功能预览，无需本地下载或绑定银行卡。
+
 ## 验证
 
 ```bash
