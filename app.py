@@ -192,18 +192,26 @@ def handle(action, q):
         after = DATA / (record_id + '.png')
         image.save(before)
         method = q.get('method', 'trustmark')
-        owner = q.get('owner', 'Photo Studio').strip()[:60] or 'Photo Studio'
+        owner = str(q.get('owner', '')).strip()[:60]
+        if method == 'visible' and not owner:
+            raise ValueError('请填写要显示在图片上的署名。')
         if method == 'visible':
             overlay = Image.new('RGBA', image.size)
             draw = ImageDraw.Draw(overlay)
             font_size = max(14, min(image.size) // 28)
-            font_paths = ['/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+            font_paths = [str(ROOT / 'assets/fonts/NotoSansCJKsc-Regular.otf'),
+                          '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
                           '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
                           '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf']
             font = next((ImageFont.truetype(p, font_size) for p in font_paths if Path(p).exists()), ImageFont.load_default())
             box = draw.textbbox((0, 0), owner, font=font)
             width, height = box[2] - box[0], box[3] - box[1]
             margin = max(8, min(image.size) // 40)
+            while width + margin * 3 > image.width and font_size > 1:
+                font_size -= 1
+                font = next((ImageFont.truetype(p, font_size) for p in font_paths if Path(p).exists()), ImageFont.load_default())
+                box = draw.textbbox((0, 0), owner, font=font)
+                width, height = box[2] - box[0], box[3] - box[1]
             draw.rounded_rectangle((image.width-width-margin*3, image.height-height-margin*3,
                                     image.width-margin, image.height-margin), radius=6, fill=(16, 28, 25, 155))
             draw.text((image.width-width-margin*2, image.height-height-margin*2-box[1]), owner, font=font, fill='white')
