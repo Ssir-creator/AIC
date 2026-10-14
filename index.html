@@ -94,7 +94,8 @@
 const $=id=>document.getElementById(id);
 let records=[],source=null,sourceUrl=null,currentId=null;
 const labels={overview:'首页',create:'图片保护',library:'素材与记录',verify:'图片溯源',lab:'传播验证',records:'核验记录'};
-async function api(action,data){const r=await fetch('/api/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const q=await r.json();if(!r.ok)throw Error(q.error||'处理失败');return q}
+async function requestJSON(url,options){let r;try{r=await fetch(url,{cache:'no-store',...options})}catch(e){throw Error('无法连接图片服务，请确认Codespaces仍在运行，并查看端口8765。')}const body=await r.text();if(!body.trim())throw Error('图片服务返回了空响应（HTTP '+r.status+'）。可能是服务重启、内存不足或端口连接中断，请查看 /tmp/tusu-preview.log。');let q;try{q=JSON.parse(body)}catch(e){throw Error('图片服务没有返回有效结果（HTTP '+r.status+'）。请重新打开Codespaces的8765端口，检查服务日志。')}if(!r.ok)throw Error(q.error||'处理失败（HTTP '+r.status+'）');return q}
+async function api(action,data){if(!['watermark','generate','trace'].includes(action))return requestJSON('/api/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const submitted=await requestJSON('/api/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,payload:data})});for(let i=0;i<960;i++){await new Promise(resolve=>setTimeout(resolve,2000));const q=await requestJSON('/api/jobs/'+submitted.job_id);if(q.state==='done')return q.result;if(q.state==='error')throw Error(q.error)}throw Error('等待时间过长，请检查服务日志；任务可能仍在运行，请勿重复提交。')}
 function escapeHtml(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function methodName(m){return ({builtin:'图溯内置轻量水印',trustmark:'TrustMark',visible:'可见署名',spherical:'球形水印',prc:'PRC'})[m]||m}
 function opName(v){return ({uploaded:'用户上传图片',original:'原始交付图片',jpeg90:'社交平台轻度压缩',jpeg50:'多次转发和明显压缩',resize50:'图片尺寸缩小一半',crop70:'图片被大面积裁剪'})[v]||v}

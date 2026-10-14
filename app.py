@@ -10,6 +10,8 @@ import subprocess
 import threading
 import uuid
 import sys
+import time
+import traceback
 import numpy as np
 
 from PIL import Image, ImageDraw, ImageFont
@@ -19,6 +21,48 @@ DATA = ROOT / 'data'
 DATA.mkdir(exist_ok=True)
 MODEL_LOCK = threading.Lock()
 DB_LOCK = threading.Lock()
+JOBS = {}
+JOBS_LOCK = threading.Lock()
+JOB_SLOT = threading.BoundedSemaphore(1)
+
+
+def read_image(encoded):
+    if not isinstance(encoded, str) or ',' not in encoded:
+        raise ValueError('图片数据不完整，请重新选择原始图片。')
+    raw = base64.b64decode(encoded.split(',', 1)[1], validate=True)
+    image = Image.open(io.BytesIO(raw))
+    if image.width * image.height > 16_000_000:
+        raise ValueError('图片分辨率过大，请先缩小到1600万像素以内后重试。')
+    return image.convert('RGB')
+
+
+def start_job(action, payload):
+    if action not in ('watermark', 'generate', 'trace'):
+        raise ValueError('不支持的任务类型。')
+    if not JOB_SLOT.acquire(blocking=False):
+        raise ValueError('已有图片任务正在处理，请等待完成后重试。')
+    job_id = uuid.uuid4().hex
+    with JOBS_LOCK:
+        for key in list(JOBS):
+            if JOBS[key]['state'] != 'running' and (time.monotonic() - JOBS[key]['created'] > 3600 or len(JOBS) >= 32):
+                del JOBS[key]
+        JOBS[job_id] = {'state': 'running', 'created': time.monotonic()}
+
+    def work():
+        outcome = {'state': 'error', 'error': '图片任务被中断，请检查日志后重试。'}
+        try:
+            result = handle(action, payload)
+            outcome = {'state': 'done', 'result': result}
+        except Exception as exc:
+            traceback.print_exc()
+            outcome = {'state': 'error', 'error': str(exc)}
+        finally:
+            with JOBS_LOCK:
+                JOBS[job_id].update(outcome)
+            JOB_SLOT.release()
+
+    threading.Thread(target=work, daemon=True).start()
+    return {'job_id': job_id}
 
 
 def builtin_embed(image, bits, strength=1.5):
@@ -28,7 +72,7 @@ def builtin_embed(image, bits, strength=1.5):
     demonstrated without a GPU. It is deliberately identified separately from
     the paper models and is not presented as their implementation.
     """
-    rgb = np.asarray(image.convert('RGB'), dtype=np.float32).copy()
+    rgb = np.array(image.convert('RGB'), dtype=np.float32)
     height, width = rgb.shape[:2]
     if min(width, height) < 128:
         raise ValueError('图片宽高至少为128像素。')
@@ -54,7 +98,8 @@ def builtin_embed(image, bits, strength=1.5):
         second_rgb -= correction
         first += correction
         second -= correction
-    return Image.fromarray(np.uint8(np.clip(rgb, 0, 255)))
+    np.clip(rgb, 0, 255, out=rgb)
+    return Image.fromarray(rgb.astype(np.uint8))
 
 
 def builtin_detect(image, expected_bits):
@@ -147,8 +192,7 @@ def execute(method, request):
 
 def handle(action, q):
     if action == 'trace':
-        raw = base64.b64decode(q['image'].split(',', 1)[1], validate=True)
-        image = Image.open(io.BytesIO(raw)).convert('RGB')
+        image = read_image(q['image'])
         upload_id = 'upload-' + uuid.uuid4().hex
         path = DATA / (upload_id + '.png')
         image.save(path)
@@ -185,8 +229,7 @@ def handle(action, q):
                 'note': '找到多个可能的登记记录，请人工复核。' if len(matches) > 1 else
                 '未找到可关联的登记标识。图片可能未经登记、标识已受损或使用了尚未支持的检测方法。'}
     if action == 'watermark':
-        raw = base64.b64decode(q['image'].split(',', 1)[1], validate=True)
-        image = Image.open(io.BytesIO(raw)).convert('RGB')
+        image = read_image(q['image'])
         record_id = uuid.uuid4().hex
         before = DATA / (record_id + '-before.png')
         after = DATA / (record_id + '.png')
@@ -333,6 +376,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path.startswith('/api/jobs/'):
+            job_id = self.path.removeprefix('/api/jobs/')
+            with JOBS_LOCK:
+                job = JOBS.get(job_id)
+                value = {k: v for k, v in job.items() if k != 'created'} if job else None
+            if value is None:
+                return self.send(404, json.dumps({'error': '任务不存在或服务已重启，请重新提交。'}, ensure_ascii=False).encode())
+            return self.send(200, json.dumps(value, ensure_ascii=False).encode())
         if self.path == '/health':
             return self.send(200, b'{"status":"ok"}')
         if self.path == '/':
@@ -373,9 +424,12 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= 16 * 1024 * 1024:
                 raise ValueError('请求大小必须在16MB以内。')
             q = json.loads(self.rfile.read(length))
+            if self.path == '/api/jobs':
+                return self.send(202, json.dumps(start_job(q['action'], q['payload']), ensure_ascii=False).encode())
             result = handle(self.path.removeprefix('/api/'), q)
             self.send(200, json.dumps(result, ensure_ascii=False).encode())
         except Exception as exc:
+            traceback.print_exc()
             self.send(400, json.dumps({'error': str(exc)}, ensure_ascii=False).encode())
 
 
