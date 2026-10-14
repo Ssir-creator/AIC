@@ -4,7 +4,42 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-if curl -fsS http://127.0.0.1:8765/health >/dev/null 2>&1; then
+if [ "${1:-}" = '--restart' ]; then
+  python - <<'PY'
+import os, signal, time
+from pathlib import Path
+root = Path.cwd().resolve()
+pids = []
+for proc in Path('/proc').iterdir():
+    if not proc.name.isdigit():
+        continue
+    try:
+        args = (proc / 'cmdline').read_bytes().split(b'\0')
+        cwd = (proc / 'cwd').resolve()
+        if cwd == root and any(a == b'app.py' or a == str(root / 'app.py').encode() for a in args):
+            pids.append(int(proc.name))
+    except (OSError, PermissionError):
+        continue
+for pid in pids:
+    try: os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError: pass
+for _ in range(30):
+    if not any(Path('/proc', str(pid)).exists() for pid in pids): break
+    time.sleep(.1)
+for pid in pids:
+    try: os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError: pass
+PY
+  rm -f /tmp/tusu-preview.pid
+fi
+
+EXPECTED_VERSION="$(python -c 'import app; print(app.VERSION)')"
+check_health() {
+  curl -fsS --max-time 3 http://127.0.0.1:8765/health 2>/dev/null |
+    python -c 'import sys,json; q=json.load(sys.stdin); sys.exit(0 if q.get("version")==sys.argv[1] else 1)' "$EXPECTED_VERSION" 2>/dev/null
+}
+
+if check_health; then
   echo "图溯预览已在运行：http://127.0.0.1:8765"
   exit 0
 fi
@@ -18,8 +53,8 @@ nohup python app.py --host 0.0.0.0 --port 8765 >/tmp/tusu-preview.log 2>&1 &
 echo $! >/tmp/tusu-preview.pid
 
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if curl -fsS http://127.0.0.1:8765/health >/dev/null 2>&1; then
-    echo "图溯预览启动成功：http://127.0.0.1:8765"
+  if check_health; then
+    echo "图溯预览启动成功，版本 $EXPECTED_VERSION，端口8765"
     exit 0
   fi
   sleep 1

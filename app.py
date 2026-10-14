@@ -21,6 +21,7 @@ DATA = ROOT / 'data'
 DATA.mkdir(exist_ok=True)
 MODEL_LOCK = threading.Lock()
 DB_LOCK = threading.Lock()
+VERSION = '2026.10.14.2'
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 JOB_SLOT = threading.BoundedSemaphore(1)
@@ -372,6 +373,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', mime)
         self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(body)
 
@@ -385,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(404, json.dumps({'error': '任务不存在或服务已重启，请重新提交。'}, ensure_ascii=False).encode())
             return self.send(200, json.dumps(value, ensure_ascii=False).encode())
         if self.path == '/health':
-            return self.send(200, b'{"status":"ok"}')
+            return self.send(200, json.dumps({'status': 'ok', 'version': VERSION}).encode())
         if self.path == '/':
             return self.send(200, (ROOT / 'index.html').read_bytes(), 'text/html; charset=utf-8')
         if self.path == '/assets/gsap.min.js':
