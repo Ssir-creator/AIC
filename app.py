@@ -121,7 +121,7 @@ def transform(image, operation):
 
 def execute(method, request):
     config_path = ROOT / 'config.json'
-    if method == 'trustmark':
+    if method in ('trustmark', 'local-image'):
         config = json.loads(config_path.read_text()).get(method, {}) if config_path.exists() else {}
         python = config.pop('python', sys.executable)
     elif not config_path.exists():
@@ -129,7 +129,7 @@ def execute(method, request):
     else:
         config = json.loads(config_path.read_text())[method]
         python = config.pop('python')
-    for name in ([] if method == 'trustmark' else ['repo', 'model', 'key']):
+    for name in ([] if method in ('trustmark', 'local-image') else ['repo', 'model', 'key']):
         if not Path(config[name]).exists():
             raise ValueError(f'本地配置路径不存在：{name}')
     payload = {**config, **request, 'method': method}
@@ -252,6 +252,28 @@ def handle(action, q):
         save_record(record)
         return record
     if action == 'generate':
+        prompt = str(q.get('prompt', '')).strip()
+        if not prompt or len(prompt) > 1000:
+            raise ValueError('请填写图片描述，最多1000个字符。')
+        if q.get('method') == 'local-image':
+            watermark_method = q.get('watermark_method', 'trustmark')
+            if watermark_method not in ('trustmark', 'builtin', 'visible'):
+                raise ValueError('请选择可用的图片保护方式。')
+            if watermark_method == 'visible' and not str(q.get('owner', '')).strip():
+                raise ValueError('使用可见署名时，请先填写署名。')
+            generated = DATA / ('draft-' + uuid.uuid4().hex + '.png')
+            value = execute('local-image', {'prompt': prompt, 'output': str(generated),
+                                           'seed': int(q.get('seed', 42))})
+            encoded = base64.b64encode(generated.read_bytes()).decode()
+            result = handle('watermark', {'image': 'data:image/png;base64,' + encoded,
+                          'method': watermark_method, 'owner': q.get('owner', ''),
+                          'title': q.get('title', '') or 'AI营销配图'})
+            record = database()[result['id']]
+            record.update({'prompt': prompt, 'generation_model': 'segmind/tiny-sd',
+                           'generation_seconds': value['seconds'], 'generation_route': '生成后添加水印'})
+            save_record(record)
+            generated.unlink(missing_ok=True)
+            return {**result, 'generation_seconds': value['seconds'], 'route': '生成后添加水印'}
         record_id = uuid.uuid4().hex
         value = execute(q['method'], {'action': 'generate', 'prompt': q['prompt'],
                         'output': str(DATA / (record_id + '.png')), 'seed': int(q.get('seed', 42))})
@@ -330,6 +352,8 @@ class Handler(BaseHTTPRequestHandler):
                 'trustmark': importlib.util.find_spec('trustmark') is not None or 'trustmark' in configured,
                 'spherical': 'spherical' in configured,
                 'prc': 'prc' in configured,
+                'local-image': all(importlib.util.find_spec(m) is not None
+                                   for m in ('torch', 'diffusers', 'transformers')),
             }
             return self.send(200, json.dumps(capabilities).encode())
         if self.path == '/report.csv':

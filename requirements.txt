@@ -1,3 +1,7 @@
 Pillow==12.0.0
 numpy==2.3.5
 trustmark==0.9.2
+diffusers==0.35.1
+transformers==4.57.1
+accelerate==1.10.1
+safetensors>=0.4.5

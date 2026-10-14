@@ -127,6 +127,33 @@ class WorkflowTests(unittest.TestCase):
         uploaded = 'data:image/png;base64,' + base64.b64encode(marked).decode()
         self.assertEqual(app.handle('trace', {'image': uploaded})['state'], 'ambiguous')
 
+    def test_ai_generation_then_watermark_workflow(self):
+        # Generator fixture validates orchestration, not AI model quality.
+        def generate_fixture(method, request):
+            self.assertEqual(method, 'local-image')
+            Image.new('RGB', (512, 512), '#7799bb').save(request['output'])
+            return {'seconds': 2}
+        with patch.object(app, 'execute', side_effect=generate_fixture):
+            result = app.handle('generate', {'method': 'local-image',
+                     'prompt': 'Product on a pedestal', 'watermark_method': 'builtin',
+                     'owner': 'Demo brand', 'title': 'Campaign'})
+        self.assertIn('before', result)
+        self.assertIn('after', result)
+        record = app.database()[result['id']]
+        self.assertEqual(record['owner'], 'Demo brand')
+        self.assertEqual(record['method'], 'builtin')
+        self.assertEqual(record['generation_route'], '生成后添加水印')
+        marked = (app.DATA / (result['id'] + '.png')).read_bytes()
+        uploaded = 'data:image/png;base64,' + base64.b64encode(marked).decode()
+        self.assertEqual(app.handle('trace', {'image': uploaded})['state'], 'matched')
+
+    def test_ai_generation_failure_does_not_register_asset(self):
+        with patch.object(app, 'execute', side_effect=RuntimeError('Model download failed')):
+            with self.assertRaises(RuntimeError):
+                app.handle('generate', {'method': 'local-image', 'prompt': 'Product photo',
+                                       'watermark_method': 'builtin'})
+        self.assertEqual(app.database(), {})
+
 
 if __name__ == '__main__':
     unittest.main()

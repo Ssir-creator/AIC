@@ -9,6 +9,23 @@ import time
 
 def run(q):
     from PIL import Image
+    if q['method'] == 'local-image':
+        import torch
+        from diffusers import StableDiffusionPipeline
+        start = time.perf_counter()
+        torch.set_num_threads(max(1, min(4, os.cpu_count() or 2)))
+        pipe = StableDiffusionPipeline.from_pretrained('segmind/tiny-sd',
+                  torch_dtype=torch.float32, use_safetensors=True)
+        pipe.to('cpu')
+        pipe.enable_attention_slicing()
+        generator = torch.Generator(device='cpu').manual_seed(int(q.get('seed', 42)))
+        with torch.inference_mode():
+            result = pipe(q['prompt'], height=512, width=512, num_inference_steps=15,
+                          guidance_scale=7.5, generator=generator)
+        if result.nsfw_content_detected and any(result.nsfw_content_detected):
+            raise ValueError('该描述未通过模型内容检查，请修改后重试。')
+        result.images[0].save(q['output'])
+        return {'seconds': time.perf_counter() - start, 'image': q['output']}
     if q['method'] == 'trustmark':
         from trustmark import TrustMark
         start = time.perf_counter()

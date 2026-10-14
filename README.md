@@ -23,6 +23,12 @@ python app.py --host 0.0.0.0 --port 8765
 
 ## 验证
 
+### 轻量AI生图
+
+图片保护页支持 `segmind/tiny-sd` 的CPU文生图，生成512×512配图后按所选方式添加水印。首次使用从Hugging Face下载模型；需要足够内存、磁盘和网络，CPU耗时取决于机器配置。默认15步，建议英文描述。模型安全检查保留。该入口不是PRC或球形水印的复现，不能据此报告论文实验成绩。
+
+若生图依赖未安装，在Codespaces执行 `bash .devcontainer/update-preview.sh`。原生论文路线仍需独立配置。当前Codex环境无法访问Hugging Face，实际模型推理尚未在该环境验证；生成—保护—登记—溯源链路通过测试夹具验证。
+
 ```bash
 python -m unittest -v
 ```
