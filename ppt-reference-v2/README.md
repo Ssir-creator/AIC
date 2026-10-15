@@ -1,23 +1,27 @@
-# 图溯 · 参考设计双版初稿
+# 图溯 · 故事线重构版
 
-按所提供《微氢芯锋》参考稿的19页节奏制作：深黑绿、青绿科技边框、金色结论、透视网格底座。
+**本次为18页新版，已替换此前19页版本。两版采用相同内容框架，仅视觉配色不同。**
 
-两版均采用球形水印论文原始框架与实验图，不使用AI生成场景插画。论文出处及方法边界放在演讲者备注。
+内容顺序：数字图像价值 → 来源信息断裂 → AIGC放大问题 → 认证/溯源/权益需求 → 现有方案 → 电商验证情境 → 用户需求 → 图溯总体架构 → 技术选型 → 生成端与核验端 → 创新与难点 → 真实功能演示 → 测试验证 → 应用价值。
 
-## A · 场景应用版
+## A · 深墨绿
 
-以数字图像可信传播为背景，展开来源认证、溯源与权益线索，电商作为一个验证场景。
+[逐页看图](A/README.md) · [下载可编辑PPT](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/A/Tusu.pptx) · [浏览PDF](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/A/Tusu.pdf)
 
-**[逐页看图](A/README.md)** · [下载PPT](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/A/Tusu.pptx) · [打开PDF](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/A/Tusu.pdf)
+![深墨绿总览](A/overview.jpg)
 
-![A版总览](A/overview.jpg)
+## B · 午夜蓝＋电光紫
 
-## B · 学术技术版
+[逐页看图](B/README.md) · [下载可编辑PPT](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/B/Tusu.pptx) · [浏览PDF](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/B/Tusu.pdf)
 
-突出可逆编码、球面映射、离线签名、图像反演、质量验证和可靠性评估。
+![午夜蓝总览](B/overview.jpg)
 
-**[逐页看图](B/README.md)** · [下载PPT](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/B/Tusu.pptx) · [打开PDF](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/B/Tusu.pdf)
+## 本次关键修改
 
-![B版总览](B/overview.jpg)
+- 前8页围绕背景、痛点、场景和需求展开，未用论文图片填充。
+- 第9页为图溯自行设计的应用总体架构。
+- 论文原图集中在第11、12、16页，用于解释方法或实验分析。
+- 第14页使用本次实际运行原型的功能截图；示例营销设计样张为自绘，不是AI生成场景图。
+- 出处、截图所用实际方法及验证范围保存在演讲者备注。
 
-文字、结构线与流程模块可编辑；论文原图、公式截图和装饰背景为图像对象。
+文字、结构线与流程模块可编辑；论文图、截图和示例样张作为图片对象。
