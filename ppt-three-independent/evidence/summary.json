@@ -1,0 +1,78 @@
+{
+  "date": "2026-10-15",
+  "method": "内置轻量水印（非球形水印）",
+  "dataset": "24张程序自绘640×640设计样张，3类布局；另24张无水印负样张",
+  "hardware": "x86_64",
+  "n_positive": 24,
+  "n_negative": 24,
+  "quality_psnr_mean": 44.15,
+  "embed_seconds_median": 0.032,
+  "conditions": {
+    "original": {
+      "correct": 24,
+      "n": 24,
+      "median_seconds": 0.2808,
+      "states": {
+        "matched": 24,
+        "unmatched": 0,
+        "ambiguous": 0
+      }
+    },
+    "jpeg90": {
+      "correct": 24,
+      "n": 24,
+      "median_seconds": 0.3,
+      "states": {
+        "matched": 24,
+        "unmatched": 0,
+        "ambiguous": 0
+      }
+    },
+    "jpeg50": {
+      "correct": 24,
+      "n": 24,
+      "median_seconds": 0.2958,
+      "states": {
+        "matched": 24,
+        "unmatched": 0,
+        "ambiguous": 0
+      }
+    },
+    "resize50": {
+      "correct": 24,
+      "n": 24,
+      "median_seconds": 0.1839,
+      "states": {
+        "matched": 24,
+        "unmatched": 0,
+        "ambiguous": 0
+      }
+    },
+    "crop70": {
+      "correct": 0,
+      "n": 24,
+      "median_seconds": 0.2134,
+      "states": {
+        "matched": 0,
+        "unmatched": 24,
+        "ambiguous": 0
+      }
+    },
+    "negative": {
+      "correct": 24,
+      "n": 24,
+      "median_seconds": 0.2825,
+      "states": {
+        "matched": 0,
+        "unmatched": 24,
+        "ambiguous": 0
+      }
+    }
+  },
+  "limitations": [
+    "受控软件试验，不是商户试点或用户调研",
+    "仅内置轻量方法，不是球形水印/TrustMark的模型性能",
+    "单进程小样本，不能推断大规模误检率或GPU速度",
+    "耗时包含本地编码、磁盘与登记遍历，不含公网延时"
+  ]
+}
