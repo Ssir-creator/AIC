@@ -1,33 +1,33 @@
-# 图溯 · 评分与落地强化版
+# 图溯 · 三份参考稿重排版
 
-**两版均为26页正文＋1页评分对应附录，同一故事线、不同配色，已替换旧版。**
+两版均为34页，包含目录、4个章节过渡和评分附录，已替换旧版。
 
-## A · 深墨绿
+## A · 白底学术答辩版
 
-[逐页看图](A/README.md) · [下载PPT](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/A/Tusu.pptx) · [浏览PDF](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/A/Tusu.pdf)
+借鉴水下机器人稿的白底蓝色页眉、对比图表、技术图与红色结论条。
 
-![A版总览](A/overview.jpg)
+**[逐页看图](A/README.md)** · [下载PPT](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/A/Tusu.pptx) · [浏览PDF](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/A/Tusu.pdf)
 
-## B · 午夜蓝＋电光紫
+![图片保护对照](A/slides/18.png)
 
-[逐页看图](B/README.md) · [下载PPT](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/B/Tusu.pptx) · [浏览PDF](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/B/Tusu.pdf)
+## B · 深蓝金色答辩版
 
-![B版总览](B/overview.jpg)
+采用第三份稿的深蓝金色层级，并结合铁轨守卫者的章节节奏、业务流程与实效案例组织。
 
-## 评分覆盖与落地重点
+**[逐页看图](B/README.md)** · [下载PPT](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/B/Tusu.pptx) · [浏览PDF](https://raw.githubusercontent.com/Ssir-creator/AIC/main/ppt-reference-v2/B/Tusu.pdf)
 
-| 评分项 | 内容与证据 | 页码 |
+![来源查询演示](B/slides/19.png)
+
+## 内容与评分覆盖
+
+| 部分 | 页码 | 核心内容 |
 |---|---|---|
-| 创新性20 | 交接断点、场景融合、任务对比与差异化 | 4—10 |
-| 需求分析15 | 用户任务、问题根因、调研设计与需求映射 | 4—8 |
-| 可行性20 | 总体架构、技术适配、模型链路和部署资源 | 11—16 |
-| 项目实施15 | 原型截图、交付物、负责人角色与阶段验收 | 15—17 |
-| 测试验证10 | 测试方案、144次受控查询、失败分析与改进 | 18—20、25 |
-| 应用效果15 | 场景案例、试点接入、成本收益与拓展 | 21—24 |
-| 总结展望5 | 薄弱点、验收门槛与未来升级 | 24—26 |
+| 研究背景与需求 | 4—10 | 大背景、来源断裂、具体业务、需求调研与现有方案 |
+| 方案与技术设计 | 12—22 | 创新、业务流程、总体框架、论文方法、原型、部署与分工 |
+| 测试验证与应用 | 24—30 | 条件设计、受控数据、失败案例、商户试点、经济性和拓展 |
+| 总结与展望 | 32—33 | 改进门槛与能力边界 |
+| 评分对应 | 34 | 七项评分到论证与证据的映射 |
 
-[查看原始测试证据与调研/试点执行包](evidence/README.md)
+[三份参考稿的具体借鉴说明](资料来源与版式借鉴.md) · [原始测试证据与调研/试点执行包](evidence/README.md)
 
-本次真实受控测试针对内置轻量水印，不能当作球形水印模型成绩。需求访谈与真实商户试点仍需执行；PPT内容按最高档的论证与证据要求组织，不代表已经取得最高档所需的全部实证。
-
-标题、文字、结构线与流程模块可编辑；论文原图与真实原型截图为图片对象。相关出处与验证范围保存在演讲者备注。
+配图仅采用相关论文原图、真实原型截图、自绘营销设计样张及实际测试样张，不使用与主题无关的AI场景图。标题、正文、流程与结构线可编辑；论文图与截图为图像对象。出处及验证范围置于演讲者备注。
