@@ -2,11 +2,11 @@
 
 一、作品与交付信息
 
-作品名称：图溯——AI图像水印与可信溯源服务
+作品名称：图溯
 
 参赛赛题：赛题4 · AI+场景创新
 
-参赛团队编号：待填（模板中的12345678仅为示例，不作为真实编号）
+参赛团队编号：AIC-2026-95418058
 
 整理日期：2026年10月20日；程序版本：2026.10.20.2
 
@@ -16,21 +16,21 @@
 
 二、可执行程序与适用系统
 
-运行包：runtime-linux.zip，内含真实构建的Linux x86_64可执行文件tusu、网页资源、字体、模型适配脚本和使用说明。内置演示流程无需另装Python。
+运行包：按团队编号统一命名的可执行程序ZIP压缩包，内含真实构建的Linux x86_64可执行文件tusu、网页资源、字体、模型适配脚本和使用说明。内置演示流程无需另装Python。
 
-验证系统为Debian 13、glibc 2.41、x86_64。其他Linux版本未验证；此文件不是Windows .exe或macOS应用。Windows/macOS可使用配套source-code.zip中的Python启动脚本。
+验证系统为Debian 13、glibc 2.41、x86_64。其他Linux版本未验证；此文件不是Windows .exe或macOS应用。Windows/macOS可使用配套配套源代码ZIP压缩包中的Python启动脚本。
 
 包中不附球形水印权重和密钥；无需GPU的本地流程可直接运行。扩展论文模型由用户另行提供相容环境。
 
 三、下载与命名
 
-网盘文件夹：待填团队编号-AI+场景创新-图溯-可执行程序。百度网盘链接：待上传后填写；提取码：待填。
+网盘文件夹：AIC-2026-95418058-AI+场景创新-图溯-可执行程序。百度网盘链接：待上传后填写；提取码：待填。
 
 交付形态为本地浏览器应用，执行程序负责HTTP服务；不能只双击index.html体验后端功能。
 
 四、Linux可执行程序启动
 
-1. 将runtime-linux.zip完整解压到拥有写权限的本地目录，保留tusu、assets和model_worker.py等相对位置。
+1. 将可执行程序ZIP压缩包完整解压到拥有写权限的本地目录，保留tusu、assets和model_worker.py等相对位置。
 
 cd 解压后的目录
 bash start.sh
@@ -45,7 +45,7 @@ bash start.sh
 
 五、Windows/macOS与云端方式
 
-Windows：预装Python 3.11+后，解压source-code.zip并双击start.bat，首次安装Pillow、NumPy需联网。macOS/Linux可执行bash start.sh；其他系统本轮未实际启动验证。
+Windows：预装Python 3.11+后，解压配套源代码ZIP压缩包并双击start.bat，首次安装Pillow、NumPy需联网。macOS/Linux可执行bash start.sh；其他系统本轮未实际启动验证。
 
 Codespaces：在运行包目录执行./tusu --host 0.0.0.0 --port 8765，随后在端口面板找到8765，选择打开浏览器。127.0.0.1是云机器内部地址，不是可直接分享的互联网网址。
 
