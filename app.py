@@ -12,6 +12,10 @@ import uuid
 import sys
 import time
 import traceback
+import contextvars
+from http.cookies import SimpleCookie
+from urllib.parse import urlsplit
+from service_store import Store, AccessError
 import numpy as np
 
 from PIL import Image, ImageDraw, ImageFont
@@ -21,7 +25,19 @@ DATA = ROOT / 'data'
 DATA.mkdir(exist_ok=True)
 MODEL_LOCK = threading.Lock()
 DB_LOCK = threading.Lock()
-VERSION = '2026.10.14.2'
+VERSION = '2026.10.20.1'
+WORKSPACE = contextvars.ContextVar('workspace', default=None)
+
+
+def data_dir():
+    uid = WORKSPACE.get()
+    path = DATA / 'workspaces' / uid if uid else DATA
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def store():
+    return Store(DATA / '_service')
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 JOB_SLOT = threading.BoundedSemaphore(1)
@@ -37,7 +53,7 @@ def read_image(encoded):
     return image.convert('RGB')
 
 
-def start_job(action, payload):
+def start_job(action, payload, identity=None, public=False):
     if action not in ('watermark', 'generate', 'trace'):
         raise ValueError('不支持的任务类型。')
     if not JOB_SLOT.acquire(blocking=False):
@@ -47,22 +63,25 @@ def start_job(action, payload):
         for key in list(JOBS):
             if JOBS[key]['state'] != 'running' and (time.monotonic() - JOBS[key]['created'] > 3600 or len(JOBS) >= 32):
                 del JOBS[key]
-        JOBS[job_id] = {'state': 'running', 'created': time.monotonic()}
+        JOBS[job_id] = {'state': 'running', 'created': time.monotonic(),
+                        'workspace': 'public' if public else identity[0]['id'] if identity else None}
+
+    context = contextvars.copy_context()
 
     def work():
         outcome = {'state': 'error', 'error': '图片任务被中断，请检查日志后重试。'}
         try:
-            result = handle(action, payload)
+            result = public_trace(payload) if public else run_action(action, payload, identity) if identity else handle(action, payload)
             outcome = {'state': 'done', 'result': result}
         except Exception as exc:
             traceback.print_exc()
-            outcome = {'state': 'error', 'error': str(exc)}
+            outcome = {'state': 'error', 'error': '公开核验未完成，请稍后重试。' if public else str(exc)}
         finally:
             with JOBS_LOCK:
                 JOBS[job_id].update(outcome)
             JOB_SLOT.release()
 
-    threading.Thread(target=work, daemon=True).start()
+    threading.Thread(target=lambda: context.run(work), daemon=True).start()
     return {'job_id': job_id}
 
 
@@ -134,7 +153,7 @@ def builtin_detect(image, expected_bits):
 
 
 def database():
-    path = DATA / 'records.json'
+    path = data_dir() / 'records.json'
     return json.loads(path.read_text()) if path.exists() else {}
 
 
@@ -142,9 +161,9 @@ def save_record(record):
     with DB_LOCK:
         records = database()
         records[record['id']] = record
-        tmp = DATA / 'records.tmp'
+        tmp = data_dir() / 'records.tmp'
         tmp.write_text(json.dumps(records, ensure_ascii=False, indent=2))
-        tmp.replace(DATA / 'records.json')
+        tmp.replace(data_dir() / 'records.json')
 
 
 def transform(image, operation):
@@ -195,7 +214,7 @@ def handle(action, q):
     if action == 'trace':
         image = read_image(q['image'])
         upload_id = 'upload-' + uuid.uuid4().hex
-        path = DATA / (upload_id + '.png')
+        path = data_dir() / (upload_id + '.png')
         image.save(path)
         matches = []
         errors = []
@@ -216,24 +235,47 @@ def handle(action, q):
                         matches.append((record, value))
             except Exception as exc:
                 errors.append(str(exc))
+        detected_types = []
+        spherical_records = [r for r in registered.values() if r['method'] == 'spherical']
+        if spherical_records:
+            try:
+                value = execute('spherical', {'action': 'detect', 'image': str(path)})
+                for record in spherical_records:
+                    if record.get('expected_bits') and value.get('recovered_bits') == record['expected_bits']:
+                        matches.append((record, {**value, 'full_message_match': True}))
+            except Exception as exc:
+                errors.append(str(exc))
+        if any(r['method'] == 'prc' for r in registered.values()):
+            try:
+                value = execute('prc', {'action': 'detect', 'image': str(path)})
+                if value.get('detected'):
+                    detected_types.append('PRC')
+            except Exception as exc:
+                errors.append(str(exc))
         if len(matches) == 1:
             record, value = matches[0]
             result = {**value, 'state': 'executed', 'image': '/images/' + path.name,
                       'operation': 'uploaded', 'checked': datetime.now(timezone.utc).isoformat()}
-            record['results'][upload_id] = result
-            save_record(record)
+            if q.get('_record_result', True):
+                record['results'][upload_id] = result
+                save_record(record)
+            path.unlink(missing_ok=True)
             return {'state': 'matched', 'record': {k: v for k, v in record.items()
                     if k not in ('expected_bits', 'results')}, 'image': result['image'],
                     'note': '匹配到登记标识；短标识匹配仅提供来源线索，仍需人工核对。'}
-        return {'state': 'ambiguous' if len(matches) > 1 else 'unmatched',
+        path.unlink(missing_ok=True)
+        return {'state': 'ambiguous' if len(matches) > 1 else 'detected_only' if detected_types else 'incomplete' if errors else 'unmatched',
+                'detected_types': detected_types,
                 'image': '/images/' + path.name, 'errors': errors,
                 'note': '找到多个可能的登记记录，请人工复核。' if len(matches) > 1 else
+                '检出支持的PRC水印，但该适配器不提供唯一任务标识，无法关联单张图片来源。' if detected_types else
+                '部分模型未完成检测，不能据此判断未检出。' if errors else
                 '未找到可关联的登记标识。图片可能未经登记、标识已受损或使用了尚未支持的检测方法。'}
     if action == 'watermark':
         image = read_image(q['image'])
         record_id = uuid.uuid4().hex
-        before = DATA / (record_id + '-before.png')
-        after = DATA / (record_id + '.png')
+        before = data_dir() / (record_id + '-before.png')
+        after = data_dir() / (record_id + '.png')
         image.save(before)
         method = q.get('method', 'trustmark')
         owner = str(q.get('owner', '')).strip()[:60]
@@ -284,7 +326,7 @@ def handle(action, q):
         image = Image.open(io.BytesIO(raw))
         image.load()
         record_id = uuid.uuid4().hex
-        image.convert('RGB').save(DATA / (record_id + '.png'))
+        image.convert('RGB').save(data_dir() / (record_id + '.png'))
         record = {'id': record_id, 'method': q['method'], 'title': q.get('title', ''),
                   'origin': '导入图片，水印状态尚未验证', 'positive': q.get('positive', True),
                   'created': datetime.now(timezone.utc).isoformat(), 'results': {}}
@@ -305,7 +347,7 @@ def handle(action, q):
                 raise ValueError('请选择可用的图片保护方式。')
             if watermark_method == 'visible' and not str(q.get('owner', '')).strip():
                 raise ValueError('使用可见署名时，请先填写署名。')
-            generated = DATA / ('draft-' + uuid.uuid4().hex + '.png')
+            generated = data_dir() / ('draft-' + uuid.uuid4().hex + '.png')
             value = execute('local-image', {'prompt': prompt, 'output': str(generated),
                                            'seed': int(q.get('seed', 42))})
             encoded = base64.b64encode(generated.read_bytes()).decode()
@@ -320,8 +362,9 @@ def handle(action, q):
             return {**result, 'generation_seconds': value['seconds'], 'route': '生成后添加水印'}
         record_id = uuid.uuid4().hex
         value = execute(q['method'], {'action': 'generate', 'prompt': q['prompt'],
-                        'output': str(DATA / (record_id + '.png')), 'seed': int(q.get('seed', 42))})
-        record = {'id': record_id, 'method': q['method'], 'title': q['prompt'],
+                        'output': str(data_dir() / (record_id + '.png')), 'seed': int(q.get('seed', 42))})
+        record = {'id': record_id, 'method': q['method'], 'title': q.get('title') or q['prompt'],
+                  'owner': str(q.get('owner', ''))[:60], 'prompt': q['prompt'],
                   'origin': '模型实际生成', 'positive': True,
                   'created': datetime.now(timezone.utc).isoformat(), 'results': {},
                   'generation_seconds': value['seconds']}
@@ -331,8 +374,8 @@ def handle(action, q):
         return record
     record = database()[q['id']]
     operation = q.get('operation', 'original')
-    image = transform(Image.open(DATA / (record['id'] + '.png')), operation)
-    path = DATA / (record['id'] + '-' + operation + '.png')
+    image = transform(Image.open(data_dir() / (record['id'] + '.png')), operation)
+    path = data_dir() / (record['id'] + '-' + operation + '.png')
     image.save(path)
     if action == 'transform':
         return {'image': '/images/' + path.name, 'size': image.size,
@@ -346,9 +389,11 @@ def handle(action, q):
             else:
                 value = execute(record['method'], {'action': 'detect', 'image': str(path),
                                                    'expected_bits': record.get('expected_bits')})
-            value.update({'state': 'executed', 'image': '/images/' + path.name})
+            value.update({'state': 'executed', 'image': '/images/' + path.name,
+                          'operation': operation, 'checked': datetime.now(timezone.utc).isoformat()})
         except Exception as exc:
-            value = {'state': 'error', 'error': str(exc), 'image': '/images/' + path.name}
+            value = {'state': 'error', 'error': str(exc), 'image': '/images/' + path.name,
+                     'operation': operation, 'checked': datetime.now(timezone.utc).isoformat()}
         record['results'][operation] = value
         save_record(record)
         return value
@@ -362,77 +407,239 @@ def report():
                      'detected', 'bit_accuracy', 'full_message_match', 'seconds', 'error'])
     for record in database().values():
         for operation, result in (record['results'] or {'original': {'state': 'unrun'}}).items():
-            writer.writerow([record['id'], record['method'], record['title'], record['positive'],
+            title = str(record['title'])
+            if title.lstrip().startswith(('=', '+', '-', '@')):
+                title = "'" + title
+            writer.writerow([record['id'], record['method'], title, record['positive'],
                 operation, result['state'], result.get('detected', ''), result.get('bit_accuracy', ''),
                 result.get('full_message_match', ''), result.get('seconds', ''), result.get('error', '')])
     return ('\ufeff' + stream.getvalue()).encode('utf-8')
 
 
+def clean_record(record):
+    return {k: v for k, v in record.items() if k != 'expected_bits'}
+
+
+def run_action(action, payload, identity):
+    user, channel, application = identity
+    started = time.perf_counter()
+    try:
+        if action not in ('watermark', 'generate', 'trace', 'transform', 'detect', 'register', 'metadata'):
+            raise ValueError('不支持的操作。')
+        if action == 'metadata':
+            record = database()[payload['id']]
+            record['visibility'] = 'public' if payload.get('visibility') == 'public' else 'private'
+            save_record(record)
+            result = clean_record(record)
+        else:
+            result = handle(action, payload)
+        if action in ('watermark', 'generate', 'register'):
+            record = database()[result['id']]
+            record.update({'task_id': str(payload.get('task_id', ''))[:120] or 'task_' + uuid.uuid4().hex[:12],
+                           'platform': str(payload.get('platform', ''))[:80] or user['company'],
+                           'application': application,
+                           'visibility': 'public' if payload.get('visibility') == 'public' else 'private'})
+            save_record(record)
+        failed = result.get('state') in ('error', 'incomplete')
+        rid = store().event(user['id'], action, 'error' if failed else 'success', channel, application,
+                            time.perf_counter() - started, result.get('error', ''))
+        result = {**result, 'request_id': rid}
+        return {k: v for k, v in result.items() if k not in ('expected_bits', 'recovered_bits')}
+    except Exception as exc:
+        store().event(user['id'], action, 'error', channel, application, time.perf_counter()-started, str(exc))
+        raise
+
+
+def public_trace(payload):
+    # Detection searches only locally registered content; it is not a universal AI classifier.
+    read_image(payload.get('image'))
+    directories = [None]
+    root = DATA / 'workspaces'
+    if root.exists():
+        directories += [p.name for p in root.iterdir() if p.is_dir()]
+    matches, errors, detected = [], [], False
+    for uid in directories:
+        token = WORKSPACE.set(uid)
+        try:
+            if not database():
+                continue
+            result = handle('trace', {**payload, '_record_result': False})
+            if result['state'] == 'ambiguous':
+                return {'state': 'ambiguous', 'note': '存在多个匹配标识，暂时无法唯一关联来源。'}
+            if result['state'] == 'matched':
+                matches.append(result['record'])
+            detected = detected or result['state'] == 'detected_only'
+            errors += result.get('errors', [])
+        finally:
+            WORKSPACE.reset(token)
+    if len(matches) > 1:
+        return {'state': 'ambiguous', 'note': '存在多个匹配标识，请进一步人工核对。'}
+    if matches:
+        record = matches[0]
+        if record.get('visibility') != 'public':
+            return {'state': 'restricted', 'note': '已匹配登记标识。来源记录由登记方设为非公开，未披露内部信息。'}
+        return {'state': 'matched', 'record': {k: record.get(k, '') for k in ('id', 'title', 'platform', 'created')},
+                'note': '标识与公开登记记录匹配；登记信息由提交方声明，不构成版权或事实真实性证明。'}
+    return {'state': 'detected_only' if detected else 'incomplete' if errors else 'unmatched',
+            'note': '检出支持的水印，但无法关联唯一来源记录。' if detected else
+                    '部分检测未完成，请稍后重试。' if errors else
+                    '未检出可关联的支持水印，不代表该图片不是AI生成。'}
+
+
 class Handler(BaseHTTPRequestHandler):
-    def send(self, status, body, mime='application/json; charset=utf-8'):
+    def send(self, status, body, mime='application/json; charset=utf-8', cookie=None):
         self.send_response(status)
         self.send_header('Content-Type', mime)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Referrer-Policy', 'same-origin')
+        self.send_header('X-Frame-Options', 'DENY')
+        if cookie is not None:
+            secure = '; Secure' if self.headers.get('X-Forwarded-Proto') == 'https' else ''
+            self.send_header('Set-Cookie', 'tusu_session=' + cookie + '; Path=/; HttpOnly; SameSite=Strict' + secure + ('; Max-Age=0' if not cookie else '; Max-Age=604800'))
         self.end_headers()
         self.wfile.write(body)
 
+    def json(self, value, status=200, cookie=None):
+        return self.send(status, json.dumps(value, ensure_ascii=False).encode(), cookie=cookie)
+
+    def session_cookie(self):
+        jar = SimpleCookie()
+        jar.load(self.headers.get('Cookie', ''))
+        return jar['tusu_session'].value if 'tusu_session' in jar else ''
+
+    def identity(self):
+        auth = self.headers.get('Authorization', '')
+        return store().authenticate(self.session_cookie(), auth[7:] if auth.startswith('Bearer ') else '')
+
     def do_GET(self):
-        if self.path.startswith('/api/jobs/'):
-            job_id = self.path.removeprefix('/api/jobs/')
-            with JOBS_LOCK:
-                job = JOBS.get(job_id)
-                value = {k: v for k, v in job.items() if k != 'created'} if job else None
-            if value is None:
-                return self.send(404, json.dumps({'error': '任务不存在或服务已重启，请重新提交。'}, ensure_ascii=False).encode())
-            return self.send(200, json.dumps(value, ensure_ascii=False).encode())
-        if self.path == '/health':
-            return self.send(200, json.dumps({'status': 'ok', 'version': VERSION}).encode())
-        if self.path == '/':
-            return self.send(200, (ROOT / 'index.html').read_bytes(), 'text/html; charset=utf-8')
-        if self.path == '/assets/gsap.min.js':
-            return self.send(200, (ROOT / 'assets' / 'gsap.min.js').read_bytes(), 'text/javascript; charset=utf-8')
-        if self.path == '/api/records':
-            # Never serve expected messages or private key material to the browser.
-            records = [{k: v for k, v in r.items() if k != 'expected_bits'} for r in database().values()]
-            return self.send(200, json.dumps(records, ensure_ascii=False).encode())
-        if self.path == '/api/capabilities':
-            config_path = ROOT / 'config.json'
-            configured = json.loads(config_path.read_text()) if config_path.exists() else {}
-            capabilities = {
-                'builtin': True,
-                'visible': True,
-                'trustmark': importlib.util.find_spec('trustmark') is not None or 'trustmark' in configured,
-                'spherical': 'spherical' in configured,
-                'prc': 'prc' in configured,
-                'local-image': all(importlib.util.find_spec(m) is not None
-                                   for m in ('torch', 'diffusers', 'transformers')),
-            }
-            return self.send(200, json.dumps(capabilities).encode())
-        if self.path == '/report.csv':
-            return self.send(200, report(), 'text/csv; charset=utf-8')
-        if self.path.startswith('/images/'):
-            name = self.path.removeprefix('/images/')
-            if '/' in name or '\\' in name or not name.endswith('.png'):
-                return self.send(404, b'{}')
-            path = DATA / name
-            if path.is_file():
-                return self.send(200, path.read_bytes(), 'image/png')
-        self.send(404, b'{}')
+        token = None
+        try:
+            path = urlsplit(self.path).path
+            if path == '/':
+                return self.send(200, (ROOT / 'index.html').read_bytes(), 'text/html; charset=utf-8')
+            if path.startswith('/assets/'):
+                asset = (ROOT / path[1:]).resolve()
+                if not asset.is_relative_to((ROOT / 'assets').resolve()) or not asset.is_file():
+                    return self.json({'error': '文件不存在。'}, 404)
+                mime = {'.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.otf': 'font/otf'}.get(asset.suffix, 'application/octet-stream')
+                return self.send(200, asset.read_bytes(), mime)
+            if path == '/health':
+                return self.json({'status': 'ok', 'version': VERSION})
+            if path == '/api/capabilities':
+                config_path = ROOT / 'config.json'
+                configured = json.loads(config_path.read_text()) if config_path.exists() else {}
+                return self.json({'builtin': True, 'visible': True,
+                    'trustmark': importlib.util.find_spec('trustmark') is not None or 'trustmark' in configured,
+                    'spherical': 'spherical' in configured, 'prc': 'prc' in configured,
+                    'local-image': all(importlib.util.find_spec(m) is not None for m in ('torch','diffusers','transformers'))})
+            if path.startswith('/api/public/jobs/'):
+                job_id = path.removeprefix('/api/public/jobs/')
+                with JOBS_LOCK:
+                    job = JOBS.get(job_id)
+                    value = {k: v for k, v in job.items() if k not in ('created', 'workspace')} if job and job.get('workspace') == 'public' else None
+                return self.json(value) if value else self.json({'error': '核验任务不存在或服务已重启。'}, 404)
+            if path == '/api/session':
+                try:
+                    return self.json({'user': self.identity()[0]})
+                except AccessError:
+                    return self.json({'user': None})
+            identity = self.identity()
+            user = identity[0]
+            token = WORKSPACE.set(user['id'])
+            if path.startswith('/api/jobs/'):
+                job_id = path.removeprefix('/api/jobs/')
+                with JOBS_LOCK:
+                    job = JOBS.get(job_id)
+                    value = {k: v for k, v in job.items() if k not in ('created', 'workspace')} if job and job.get('workspace') == user['id'] else None
+                return self.json(value, 200) if value else self.json({'error': '任务不存在或服务已重启。'}, 404)
+            if path == '/api/records':
+                if identity[1] == 'api':
+                    store().event(user['id'], 'records', 'success', 'api', identity[2])
+                return self.json([clean_record(r) for r in database().values()])
+            if path == '/api/keys':
+                return self.json(store().keys(user['id']))
+            if path == '/api/events':
+                return self.json(store().events(user['id']))
+            if path == '/report.csv':
+                return self.send(200, report(), 'text/csv; charset=utf-8')
+            if path.startswith('/images/'):
+                name = path.removeprefix('/images/')
+                if '/' not in name and '\\' not in name and name.endswith('.png'):
+                    image = data_dir() / name
+                    if image.is_file():
+                        return self.send(200, image.read_bytes(), 'image/png')
+            return self.json({'error': '请求的资源不存在。'}, 404)
+        except AccessError as exc:
+            return self.json({'error': str(exc)}, 401)
+        except Exception:
+            traceback.print_exc()
+            return self.json({'error': '读取失败，请查看服务日志。'}, 500)
+        finally:
+            if token is not None:
+                WORKSPACE.reset(token)
 
     def do_POST(self):
+        token = None
         try:
+            origin = self.headers.get('Origin')
+            if origin and urlsplit(origin).netloc != self.headers.get('Host'):
+                return self.json({'error': '不允许跨站提交。'}, 403)
             length = int(self.headers.get('Content-Length', 0))
             if not 0 < length <= 16 * 1024 * 1024:
                 raise ValueError('请求大小必须在16MB以内。')
             q = json.loads(self.rfile.read(length))
-            if self.path == '/api/jobs':
-                return self.send(202, json.dumps(start_job(q['action'], q['payload']), ensure_ascii=False).encode())
-            result = handle(self.path.removeprefix('/api/'), q)
-            self.send(200, json.dumps(result, ensure_ascii=False).encode())
-        except Exception as exc:
+            if not isinstance(q, dict):
+                raise ValueError('请求应为JSON对象。')
+            path = urlsplit(self.path).path
+            if path in ('/api/signup', '/api/login'):
+                session, user = store().signup(q) if path == '/api/signup' else store().login(q)
+                return self.json({'user': user}, cookie=session)
+            if path == '/api/logout':
+                store().logout(self.session_cookie())
+                return self.json({'ok': True}, cookie='')
+            if path == '/api/inquiry':
+                return self.json(store().inquiry(q))
+            if path == '/api/public/jobs':
+                return self.json(start_job('trace', q, public=True), 202)
+            if path == '/api/public/trace':
+                if not JOB_SLOT.acquire(blocking=False):
+                    raise ValueError('检测服务繁忙，请稍后重试。')
+                try:
+                    return self.json(public_trace(q))
+                finally:
+                    JOB_SLOT.release()
+            identity = self.identity()
+            user = identity[0]
+            token = WORKSPACE.set(user['id'])
+            if path == '/api/keys':
+                return self.json(store().create_key(user['id'], q.get('name', '')))
+            if path == '/api/keys/revoke':
+                return self.json(store().revoke(user['id'], q.get('id')))
+            if path == '/api/profile':
+                return self.json({'user': store().update_company(user['id'], q.get('company'))})
+            if path == '/api/jobs':
+                return self.json(start_job(q['action'], q['payload'], identity), 202)
+            action = path.removeprefix('/api/')
+            if action in ('watermark', 'generate', 'trace'):
+                if not JOB_SLOT.acquire(blocking=False):
+                    raise ValueError('已有图片任务正在执行，请稍后重试。')
+                try:
+                    return self.json(run_action(action, q, identity))
+                finally:
+                    JOB_SLOT.release()
+            return self.json(run_action(action, q, identity))
+        except AccessError as exc:
+            return self.json({'error': str(exc)}, 401)
+        except (ValueError, KeyError) as exc:
+            return self.json({'error': str(exc)}, 400)
+        except Exception:
             traceback.print_exc()
-            self.send(400, json.dumps({'error': str(exc)}, ensure_ascii=False).encode())
+            return self.json({'error': '处理未完成，请检查模型环境或服务日志后重试。'}, 500)
+        finally:
+            if token is not None:
+                WORKSPACE.reset(token)
 
 
 if __name__ == '__main__':
@@ -441,5 +648,5 @@ if __name__ == '__main__':
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--host', default='0.0.0.0')
     args = parser.parse_args()
-    print(f'演示服务启动，地址 {args.host}:{args.port}；模型结果仅在实际执行后记录。', flush=True)
+    print(f'图溯服务启动，地址 {args.host}:{args.port}；模型结果仅在实际执行后记录。', flush=True)
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
