@@ -147,6 +147,26 @@ class EnterpriseTests(unittest.TestCase):
         self.assertNotIn('workspace',result)
         self.assertEqual(self.call('GET','/api/jobs/'+q['job_id'])[0],404)
 
+    def test_demo_video_range_and_content_type(self):
+        root=Path(self.temp.name)/'static'
+        (root/'assets').mkdir(parents=True)
+        (root/'assets'/'demo.mp4').write_bytes(b'0123456789abcdef')
+        with patch.object(app,'ROOT',root):
+            conn=http.client.HTTPConnection('127.0.0.1',self.port)
+            conn.request('GET','/assets/demo.mp4',headers={'Range':'bytes=2-5'})
+            response=conn.getresponse()
+            self.assertEqual(response.status,206)
+            self.assertEqual(response.getheader('Content-Type'),'video/mp4')
+            self.assertEqual(response.getheader('Content-Range'),'bytes 2-5/16')
+            self.assertEqual(response.read(),b'2345')
+            conn.close()
+            conn=http.client.HTTPConnection('127.0.0.1',self.port)
+            conn.request('GET','/assets/demo.mp4',headers={'Range':'bytes=99-'})
+            response=conn.getresponse()
+            self.assertEqual(response.status,416)
+            response.read()
+            conn.close()
+
     def test_failed_model_does_not_register_or_claim_success(self):
         with patch.object(app,'execute',side_effect=RuntimeError('model unavailable')):
             status,_,_=self.call('POST','/api/watermark',{'image':self.image,'method':'trustmark'})

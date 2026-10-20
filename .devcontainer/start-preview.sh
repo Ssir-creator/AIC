@@ -15,8 +15,10 @@ for proc in Path('/proc').iterdir():
         continue
     try:
         args = (proc / 'cmdline').read_bytes().split(b'\0')
-        cwd = (proc / 'cwd').resolve()
-        if cwd == root and any(a == b'app.py' or a == str(root / 'app.py').encode() for a in args):
+        absolute_app = str(root / 'app.py').encode()
+        if absolute_app in args:
+            pids.append(int(proc.name))
+        elif b'app.py' in args and (proc / 'cwd').resolve() == root:
             pids.append(int(proc.name))
     except (OSError, PermissionError):
         continue
@@ -49,7 +51,7 @@ if [ -f /tmp/tusu-preview.pid ]; then
   rm -f /tmp/tusu-preview.pid
 fi
 
-nohup python app.py --host 0.0.0.0 --port 8765 >/tmp/tusu-preview.log 2>&1 &
+nohup python "$PROJECT_DIR/app.py" --host 0.0.0.0 --port 8765 >/tmp/tusu-preview.log 2>&1 &
 echo $! >/tmp/tusu-preview.pid
 
 for _ in 1 2 3 4 5 6 7 8 9 10; do

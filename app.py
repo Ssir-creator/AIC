@@ -13,6 +13,7 @@ import sys
 import time
 import traceback
 import contextvars
+import re
 from http.cookies import SimpleCookie
 from urllib.parse import urlsplit
 from service_store import Store, AccessError
@@ -25,7 +26,7 @@ DATA = ROOT / 'data'
 DATA.mkdir(exist_ok=True)
 MODEL_LOCK = threading.Lock()
 DB_LOCK = threading.Lock()
-VERSION = '2026.10.20.1'
+VERSION = '2026.10.20.2'
 WORKSPACE = contextvars.ContextVar('workspace', default=None)
 
 
@@ -487,7 +488,7 @@ def public_trace(payload):
 
 
 class Handler(BaseHTTPRequestHandler):
-    def send(self, status, body, mime='application/json; charset=utf-8', cookie=None):
+    def send(self, status, body, mime='application/json; charset=utf-8', cookie=None, extra_headers=None):
         self.send_response(status)
         self.send_header('Content-Type', mime)
         self.send_header('Content-Length', str(len(body)))
@@ -495,6 +496,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Referrer-Policy', 'same-origin')
         self.send_header('X-Frame-Options', 'DENY')
+        for key, value in (extra_headers or {}).items():
+            self.send_header(key, value)
         if cookie is not None:
             secure = '; Secure' if self.headers.get('X-Forwarded-Proto') == 'https' else ''
             self.send_header('Set-Cookie', 'tusu_session=' + cookie + '; Path=/; HttpOnly; SameSite=Strict' + secure + ('; Max-Age=0' if not cookie else '; Max-Age=604800'))
@@ -523,7 +526,28 @@ class Handler(BaseHTTPRequestHandler):
                 asset = (ROOT / path[1:]).resolve()
                 if not asset.is_relative_to((ROOT / 'assets').resolve()) or not asset.is_file():
                     return self.json({'error': '文件不存在。'}, 404)
-                mime = {'.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.otf': 'font/otf'}.get(asset.suffix, 'application/octet-stream')
+                mime = {'.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+                        '.svg': 'image/svg+xml', '.otf': 'font/otf', '.html': 'text/html; charset=utf-8',
+                        '.mp4': 'video/mp4', '.png': 'image/png', '.srt': 'text/plain; charset=utf-8',
+                        '.csv': 'text/csv; charset=utf-8'}.get(asset.suffix, 'application/octet-stream')
+                if asset.suffix == '.mp4':
+                    size = asset.stat().st_size
+                    requested = self.headers.get('Range')
+                    if requested:
+                        match = re.fullmatch(r'bytes=(\d*)-(\d*)', requested)
+                        if not match or not any(match.groups()):
+                            return self.send(416, b'', mime, extra_headers={'Content-Range': f'bytes */{size}'})
+                        first, last = match.groups()
+                        start = int(first) if first else max(0, size-int(last))
+                        end = min(size-1, int(last)) if first and last else size-1
+                        if start >= size or start > end or (not first and int(last) == 0):
+                            return self.send(416, b'', mime, extra_headers={'Content-Range': f'bytes */{size}'})
+                        with asset.open('rb') as stream:
+                            stream.seek(start)
+                            body = stream.read(end-start+1)
+                        return self.send(206, body, mime, extra_headers={
+                            'Accept-Ranges': 'bytes', 'Content-Range': f'bytes {start}-{end}/{size}'})
+                    return self.send(200, asset.read_bytes(), mime, extra_headers={'Accept-Ranges': 'bytes'})
                 return self.send(200, asset.read_bytes(), mime)
             if path == '/health':
                 return self.json({'status': 'ok', 'version': VERSION})
